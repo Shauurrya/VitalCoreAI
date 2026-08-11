@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Health Connect permissions.
+        These appear in the privacy_policy category of the Health Connect consent UI.
+    -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <uses-permission android:name="android.permission.health.READ_BODY_FAT" />
+
+    <!--
+        Additional record types the Galaxy Watch Active 2 pipeline can supply via
+        Samsung Health → Health Connect. All are treated as OPTIONAL at runtime:
+        if Samsung Health never writes them, the corresponding reads simply return
+        empty and the dependent features degrade rather than fail.
+    -->
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_FLOORS_CLIMBED" />
+    <uses-permission android:name="android.permission.health.READ_ELEVATION_GAINED" />
+    <uses-permission android:name="android.permission.health.READ_SPEED" />
+    <uses-permission android:name="android.permission.health.READ_VO2_MAX" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE_ROUTE" />
+    <!--
+        HRV is requested OPTIONALLY and opportunistically only.
+        The Galaxy Watch Active 2 (Tizen) cannot supply beat-to-beat intervals to a
+        third-party app — the Samsung Privileged Health SDK that exposes IBI/PPG is
+        Galaxy Watch4+ (Wear OS) only. Nothing in this app requires HRV; if another
+        device ever writes it, the Heart screen will surface it as a bonus signal.
+    -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+
+    <!--
+        CRITICAL — without these two, the app is functionally crippled:
+
+        READ_HEALTH_DATA_IN_BACKGROUND
+          Health Connect only serves reads to a foreground app unless this is granted.
+          The WorkManager SyncWorker runs in the background, so without it every
+          scheduled sync silently returns zero records and the app only ever has data
+          from moments the user had it open.
+
+        READ_HEALTH_DATA_HISTORY
+          Without it, reads are capped at 30 days prior to the permission grant.
+          The 30-day backfill sits exactly on that boundary and the 28-day personal
+          baselines could never be built on a fresh install.
+    -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
+
+    <!-- WorkManager -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- B3: Local notifications (required on Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Required for Android 13 and below to query whether the standalone
+        Health Connect app is installed before requesting permissions.
+    -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+        <intent>
+            <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".VitalCoreApp"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="VitalCore AI"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VitalCoreAI">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.VitalCoreAI">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Health Connect: Privacy Policy / Data Rationale Activity.
+
+            Android 13 and below (standalone Health Connect app):
+            Health Connect calls this intent before showing the permission dialog.
+            If this resolves to a non-existent or non-exported activity the app
+            will NOT appear in Health Connect's "App permissions" list and the
+            permission dialog will NEVER be displayed to the user.
+
+            WRONG (old code): android:name="androidx.health.connect.client.PermissionController"
+            — that is an SDK class, not an Activity in our app. HC cannot launch it.
+
+            CORRECT: point to our own Activity that actually extends ComponentActivity.
+        -->
+        <activity
+            android:name=".HealthPrivacyRationaleActivity"
+            android:exported="true"
+            android:theme="@style/Theme.VitalCoreAI">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Android 14+ (Health Connect built into the OS):
+            The platform uses a different intent to find the rationale screen.
+            Without this alias the app will NOT appear under Health Connect →
+            App permissions on Android 14+ devices.
+        -->
+        <activity-alias
+            android:name=".HealthPrivacyRationaleActivityAlias"
+            android:exported="true"
+            android:targetActivity=".HealthPrivacyRationaleActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Hilt WorkManager initializer: disable default initializer -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+        <!-- B9: FileProvider for CSV export sharing -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.example.vitalcoreai.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>

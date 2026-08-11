@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider paths for B9 CSV export.
+    Maps the app-private "exports" subdirectory under external files.
+    No READ_EXTERNAL_STORAGE or WRITE_EXTERNAL_STORAGE required on Android 10+.
+-->
+<paths>
+    <external-files-path
+        name="exports"
+        path="exports/" />
+</paths>
