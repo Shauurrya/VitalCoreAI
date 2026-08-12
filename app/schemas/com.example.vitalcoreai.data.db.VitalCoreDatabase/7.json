@@ -1,0 +1,1259 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 7,
+    "identityHash": "d4aafe2a6c0aca3a51a9ae6b12971070",
+    "entities": [
+      {
+        "tableName": "daily_metrics",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`dateEpochDay` INTEGER NOT NULL, `restingHR` INTEGER, `steps` INTEGER, `distanceMeters` REAL, `caloriesBurned` INTEGER, `weightKg` REAL, `bodyFatPercent` REAL, `spO2Percent` REAL, `sleepDurationMinutes` INTEGER, `sleepEfficiencyPercent` REAL, `sleepDeepMinutes` INTEGER, `sleepRemMinutes` INTEGER, `sleepLightMinutes` INTEGER, `sleepAwakeMinutes` INTEGER, `bedtimeMinuteOfDay` INTEGER, `wakeTimeMinuteOfDay` INTEGER, `lastSyncTimestampMs` INTEGER NOT NULL, `dataSourceType` TEXT, `hrPointsPerHour` REAL, `partialDayFraction` REAL, `restingHRDerived` INTEGER, `floorsClimbed` INTEGER, `elevationGainMeters` REAL, `hrvRmssdMs` REAL, `activeCalories` INTEGER, `spO2ReadingCount` INTEGER, `spO2FromSleepWindow` INTEGER, `sleepStagesAvailable` INTEGER, `hasData` INTEGER NOT NULL, `newestRecordTimestampMs` INTEGER, PRIMARY KEY(`dateEpochDay`))",
+        "fields": [
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "restingHR",
+            "columnName": "restingHR",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "steps",
+            "columnName": "steps",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "distanceMeters",
+            "columnName": "distanceMeters",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "caloriesBurned",
+            "columnName": "caloriesBurned",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weightKg",
+            "columnName": "weightKg",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "bodyFatPercent",
+            "columnName": "bodyFatPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "spO2Percent",
+            "columnName": "spO2Percent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sleepDurationMinutes",
+            "columnName": "sleepDurationMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepEfficiencyPercent",
+            "columnName": "sleepEfficiencyPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sleepDeepMinutes",
+            "columnName": "sleepDeepMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepRemMinutes",
+            "columnName": "sleepRemMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepLightMinutes",
+            "columnName": "sleepLightMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepAwakeMinutes",
+            "columnName": "sleepAwakeMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bedtimeMinuteOfDay",
+            "columnName": "bedtimeMinuteOfDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "wakeTimeMinuteOfDay",
+            "columnName": "wakeTimeMinuteOfDay",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSyncTimestampMs",
+            "columnName": "lastSyncTimestampMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dataSourceType",
+            "columnName": "dataSourceType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hrPointsPerHour",
+            "columnName": "hrPointsPerHour",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "partialDayFraction",
+            "columnName": "partialDayFraction",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "restingHRDerived",
+            "columnName": "restingHRDerived",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "floorsClimbed",
+            "columnName": "floorsClimbed",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "elevationGainMeters",
+            "columnName": "elevationGainMeters",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "hrvRmssdMs",
+            "columnName": "hrvRmssdMs",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "activeCalories",
+            "columnName": "activeCalories",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "spO2ReadingCount",
+            "columnName": "spO2ReadingCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "spO2FromSleepWindow",
+            "columnName": "spO2FromSleepWindow",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sleepStagesAvailable",
+            "columnName": "sleepStagesAvailable",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hasData",
+            "columnName": "hasData",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "newestRecordTimestampMs",
+            "columnName": "newestRecordTimestampMs",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "dateEpochDay"
+          ]
+        }
+      },
+      {
+        "tableName": "computed_scores",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`dateEpochDay` INTEGER NOT NULL, `recoveryScore` REAL, `recoveryConfidence` TEXT, `recoveryExplanation` TEXT, `recoveryBreakdown` TEXT, `readinessScore` REAL, `readinessConfidence` TEXT, `readinessExplanation` TEXT, `readinessBreakdown` TEXT, `sleepScore` REAL, `sleepConfidence` TEXT, `sleepExplanation` TEXT, `sleepBreakdown` TEXT, `stressScore` REAL, `stressConfidence` TEXT, `stressExplanation` TEXT, `stressBreakdown` TEXT, `activityScore` REAL, `consistencyScore` REAL, `lifestyleScore` REAL, `trainingLoadNormalized` REAL, `acwr` REAL, `acwrZone` TEXT, `vo2MaxEstimate` REAL, `biologicalAge` INTEGER, `weeklyHealthScore` REAL, `monthlyHealthScore` REAL, `recoveryMomentum` TEXT, `sleepMomentum` TEXT, `trainingMomentum` TEXT, `dataQualityLevel` TEXT, `dataQualityPercent` INTEGER, `energyBankScore` REAL, `energyBankExplanation` TEXT, `energyBankBreakdown` TEXT, `hrr1` INTEGER, `hrr2` INTEGER, `hrrTrend` TEXT, `strain` REAL, `dailyExertionMinutes` REAL, `strainConfidence` TEXT, `strainExplanation` TEXT, `strainBreakdown` TEXT, `strainIsProxy` INTEGER, `strainZone` TEXT, `acwrIsMeaningful` INTEGER, `acwrDaysOfHistory` INTEGER, `forecastLow` INTEGER, `forecastHigh` INTEGER, `forecastConfidence` TEXT, `forecastDrivers` TEXT, `forecastRisks` TEXT, `sleepConsistencyScore` REAL, `sleepConsistencyLabel` TEXT, `bedtimeSdMinutes` INTEGER, `wakeSdMinutes` INTEGER, `trend7Direction` TEXT, `trend14Direction` TEXT, `trend30Direction` TEXT, `trendContributors` TEXT, `anomaliesEncoded` TEXT, `anomalyCount` INTEGER, `recommendationType` TEXT, `recommendationIntensity` TEXT, `recommendationVolumePct` INTEGER, `recommendationDetail` TEXT, `dataQualityFactors` TEXT, `dataQualityPositives` TEXT, `createdAtMs` INTEGER NOT NULL, PRIMARY KEY(`dateEpochDay`))",
+        "fields": [
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recoveryScore",
+            "columnName": "recoveryScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "recoveryConfidence",
+            "columnName": "recoveryConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recoveryExplanation",
+            "columnName": "recoveryExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recoveryBreakdown",
+            "columnName": "recoveryBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "readinessScore",
+            "columnName": "readinessScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "readinessConfidence",
+            "columnName": "readinessConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "readinessExplanation",
+            "columnName": "readinessExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "readinessBreakdown",
+            "columnName": "readinessBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sleepScore",
+            "columnName": "sleepScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sleepConfidence",
+            "columnName": "sleepConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sleepExplanation",
+            "columnName": "sleepExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sleepBreakdown",
+            "columnName": "sleepBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stressScore",
+            "columnName": "stressScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "stressConfidence",
+            "columnName": "stressConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stressExplanation",
+            "columnName": "stressExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stressBreakdown",
+            "columnName": "stressBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "activityScore",
+            "columnName": "activityScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "consistencyScore",
+            "columnName": "consistencyScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "lifestyleScore",
+            "columnName": "lifestyleScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "trainingLoadNormalized",
+            "columnName": "trainingLoadNormalized",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "acwr",
+            "columnName": "acwr",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "acwrZone",
+            "columnName": "acwrZone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "vo2MaxEstimate",
+            "columnName": "vo2MaxEstimate",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "biologicalAge",
+            "columnName": "biologicalAge",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyHealthScore",
+            "columnName": "weeklyHealthScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "monthlyHealthScore",
+            "columnName": "monthlyHealthScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "recoveryMomentum",
+            "columnName": "recoveryMomentum",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sleepMomentum",
+            "columnName": "sleepMomentum",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "trainingMomentum",
+            "columnName": "trainingMomentum",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dataQualityLevel",
+            "columnName": "dataQualityLevel",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dataQualityPercent",
+            "columnName": "dataQualityPercent",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "energyBankScore",
+            "columnName": "energyBankScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "energyBankExplanation",
+            "columnName": "energyBankExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "energyBankBreakdown",
+            "columnName": "energyBankBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hrr1",
+            "columnName": "hrr1",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hrr2",
+            "columnName": "hrr2",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hrrTrend",
+            "columnName": "hrrTrend",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "strain",
+            "columnName": "strain",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "dailyExertionMinutes",
+            "columnName": "dailyExertionMinutes",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "strainConfidence",
+            "columnName": "strainConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "strainExplanation",
+            "columnName": "strainExplanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "strainBreakdown",
+            "columnName": "strainBreakdown",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "strainIsProxy",
+            "columnName": "strainIsProxy",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "strainZone",
+            "columnName": "strainZone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "acwrIsMeaningful",
+            "columnName": "acwrIsMeaningful",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "acwrDaysOfHistory",
+            "columnName": "acwrDaysOfHistory",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "forecastLow",
+            "columnName": "forecastLow",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "forecastHigh",
+            "columnName": "forecastHigh",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "forecastConfidence",
+            "columnName": "forecastConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "forecastDrivers",
+            "columnName": "forecastDrivers",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "forecastRisks",
+            "columnName": "forecastRisks",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sleepConsistencyScore",
+            "columnName": "sleepConsistencyScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "sleepConsistencyLabel",
+            "columnName": "sleepConsistencyLabel",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bedtimeSdMinutes",
+            "columnName": "bedtimeSdMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "wakeSdMinutes",
+            "columnName": "wakeSdMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "trend7Direction",
+            "columnName": "trend7Direction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "trend14Direction",
+            "columnName": "trend14Direction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "trend30Direction",
+            "columnName": "trend30Direction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "trendContributors",
+            "columnName": "trendContributors",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "anomaliesEncoded",
+            "columnName": "anomaliesEncoded",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "anomalyCount",
+            "columnName": "anomalyCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recommendationType",
+            "columnName": "recommendationType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recommendationIntensity",
+            "columnName": "recommendationIntensity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recommendationVolumePct",
+            "columnName": "recommendationVolumePct",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recommendationDetail",
+            "columnName": "recommendationDetail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dataQualityFactors",
+            "columnName": "dataQualityFactors",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dataQualityPositives",
+            "columnName": "dataQualityPositives",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "createdAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "dateEpochDay"
+          ]
+        }
+      },
+      {
+        "tableName": "exercise_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`startMs` INTEGER NOT NULL, `dateEpochDay` INTEGER NOT NULL, `endMs` INTEGER NOT NULL, `exerciseType` TEXT NOT NULL, `exerciseTypeId` INTEGER NOT NULL, `durationMinutes` INTEGER NOT NULL, `caloriesBurned` INTEGER, `distanceMeters` REAL, `avgHR` INTEGER, `maxHR` INTEGER, `trainingLoadNormalized` REAL, `dominantZone` TEXT, `hasHeartRateData` INTEGER NOT NULL, `belowZone1Pct` REAL, `zone1Pct` REAL, `zone2Pct` REAL, `zone3Pct` REAL, `zone4Pct` REAL, `zone5Pct` REAL, `muscleGroups` TEXT, `rpe` INTEGER, PRIMARY KEY(`startMs`))",
+        "fields": [
+          {
+            "fieldPath": "startMs",
+            "columnName": "startMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endMs",
+            "columnName": "endMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exerciseType",
+            "columnName": "exerciseType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exerciseTypeId",
+            "columnName": "exerciseTypeId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMinutes",
+            "columnName": "durationMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "caloriesBurned",
+            "columnName": "caloriesBurned",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "distanceMeters",
+            "columnName": "distanceMeters",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgHR",
+            "columnName": "avgHR",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "maxHR",
+            "columnName": "maxHR",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "trainingLoadNormalized",
+            "columnName": "trainingLoadNormalized",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "dominantZone",
+            "columnName": "dominantZone",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hasHeartRateData",
+            "columnName": "hasHeartRateData",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "belowZone1Pct",
+            "columnName": "belowZone1Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "zone1Pct",
+            "columnName": "zone1Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "zone2Pct",
+            "columnName": "zone2Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "zone3Pct",
+            "columnName": "zone3Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "zone4Pct",
+            "columnName": "zone4Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "zone5Pct",
+            "columnName": "zone5Pct",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "muscleGroups",
+            "columnName": "muscleGroups",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rpe",
+            "columnName": "rpe",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "startMs"
+          ]
+        }
+      },
+      {
+        "tableName": "heart_rate_samples",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `dateEpochDay` INTEGER NOT NULL, `timestampMs` INTEGER NOT NULL, `bpm` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestampMs",
+            "columnName": "timestampMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bpm",
+            "columnName": "bpm",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_heart_rate_samples_dateEpochDay",
+            "unique": false,
+            "columnNames": [
+              "dateEpochDay"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_heart_rate_samples_dateEpochDay` ON `${TABLE_NAME}` (`dateEpochDay`)"
+          },
+          {
+            "name": "index_heart_rate_samples_timestampMs",
+            "unique": true,
+            "columnNames": [
+              "timestampMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_heart_rate_samples_timestampMs` ON `${TABLE_NAME}` (`timestampMs`)"
+          }
+        ]
+      },
+      {
+        "tableName": "weekly_reports",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`weekStartEpochDay` INTEGER NOT NULL, `weekEndEpochDay` INTEGER NOT NULL, `avgRecovery` REAL, `avgReadiness` REAL, `avgSleep` REAL, `avgActivity` REAL, `weeklyHealthScore` REAL, `deltaFromPreviousWeek` REAL, `explanation` TEXT, `highlights` TEXT, `personalRecords` TEXT, `rankedFactors` TEXT, `achievementsSummary` TEXT, PRIMARY KEY(`weekStartEpochDay`))",
+        "fields": [
+          {
+            "fieldPath": "weekStartEpochDay",
+            "columnName": "weekStartEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "weekEndEpochDay",
+            "columnName": "weekEndEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgRecovery",
+            "columnName": "avgRecovery",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgReadiness",
+            "columnName": "avgReadiness",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgSleep",
+            "columnName": "avgSleep",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgActivity",
+            "columnName": "avgActivity",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "weeklyHealthScore",
+            "columnName": "weeklyHealthScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "deltaFromPreviousWeek",
+            "columnName": "deltaFromPreviousWeek",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "explanation",
+            "columnName": "explanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "highlights",
+            "columnName": "highlights",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "personalRecords",
+            "columnName": "personalRecords",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rankedFactors",
+            "columnName": "rankedFactors",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "achievementsSummary",
+            "columnName": "achievementsSummary",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "weekStartEpochDay"
+          ]
+        }
+      },
+      {
+        "tableName": "monthly_reports",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`monthStartEpochDay` INTEGER NOT NULL, `monthEndEpochDay` INTEGER NOT NULL, `avgRecovery` REAL, `avgReadiness` REAL, `avgSleep` REAL, `avgActivity` REAL, `monthlyHealthScore` REAL, `deltaFromPreviousMonth` REAL, `explanation` TEXT, `personalRecords` TEXT, `rankedFactors` TEXT, PRIMARY KEY(`monthStartEpochDay`))",
+        "fields": [
+          {
+            "fieldPath": "monthStartEpochDay",
+            "columnName": "monthStartEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthEndEpochDay",
+            "columnName": "monthEndEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgRecovery",
+            "columnName": "avgRecovery",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgReadiness",
+            "columnName": "avgReadiness",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgSleep",
+            "columnName": "avgSleep",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "avgActivity",
+            "columnName": "avgActivity",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "monthlyHealthScore",
+            "columnName": "monthlyHealthScore",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "deltaFromPreviousMonth",
+            "columnName": "deltaFromPreviousMonth",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "explanation",
+            "columnName": "explanation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "personalRecords",
+            "columnName": "personalRecords",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rankedFactors",
+            "columnName": "rankedFactors",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "monthStartEpochDay"
+          ]
+        }
+      },
+      {
+        "tableName": "achievements",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `achievementId` TEXT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `icon` TEXT NOT NULL, `earnedEpochDay` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "achievementId",
+            "columnName": "achievementId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "icon",
+            "columnName": "icon",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "earnedEpochDay",
+            "columnName": "earnedEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_achievements_achievementId",
+            "unique": true,
+            "columnNames": [
+              "achievementId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_achievements_achievementId` ON `${TABLE_NAME}` (`achievementId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sync_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`recordType` TEXT NOT NULL, `lastSyncTimestampMs` INTEGER NOT NULL, `lastSuccessfulSyncMs` INTEGER NOT NULL, PRIMARY KEY(`recordType`))",
+        "fields": [
+          {
+            "fieldPath": "recordType",
+            "columnName": "recordType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncTimestampMs",
+            "columnName": "lastSyncTimestampMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncMs",
+            "columnName": "lastSuccessfulSyncMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "recordType"
+          ]
+        }
+      },
+      {
+        "tableName": "check_ins",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`dateEpochDay` INTEGER NOT NULL, `energy` INTEGER NOT NULL, `stress` INTEGER NOT NULL, `soreness` INTEGER NOT NULL, `sleepQuality` INTEGER NOT NULL, `mood` INTEGER NOT NULL, `motivation` INTEGER, `illnessFlag` INTEGER NOT NULL, `notes` TEXT, `createdAtMs` INTEGER NOT NULL, PRIMARY KEY(`dateEpochDay`))",
+        "fields": [
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "energy",
+            "columnName": "energy",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stress",
+            "columnName": "stress",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "soreness",
+            "columnName": "soreness",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sleepQuality",
+            "columnName": "sleepQuality",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mood",
+            "columnName": "mood",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "motivation",
+            "columnName": "motivation",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "illnessFlag",
+            "columnName": "illnessFlag",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "createdAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "dateEpochDay"
+          ]
+        }
+      },
+      {
+        "tableName": "journal_entries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `dateEpochDay` INTEGER NOT NULL, `habitId` TEXT NOT NULL, `value` REAL NOT NULL, `unit` TEXT NOT NULL, `timeOfDay` TEXT, `notes` TEXT, `createdAtMs` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateEpochDay",
+            "columnName": "dateEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitId",
+            "columnName": "habitId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unit",
+            "columnName": "unit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeOfDay",
+            "columnName": "timeOfDay",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "createdAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_journal_entries_dateEpochDay",
+            "unique": false,
+            "columnNames": [
+              "dateEpochDay"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_journal_entries_dateEpochDay` ON `${TABLE_NAME}` (`dateEpochDay`)"
+          },
+          {
+            "name": "index_journal_entries_habitId",
+            "unique": false,
+            "columnNames": [
+              "habitId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_journal_entries_habitId` ON `${TABLE_NAME}` (`habitId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "muscle_recovery",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `muscleGroup` TEXT NOT NULL, `lastTrainedEpochDay` INTEGER NOT NULL, `estimatedRecoveryHours` INTEGER NOT NULL, `volumeLoad` REAL NOT NULL, `rpe` INTEGER NOT NULL, `sorenessRating` INTEGER, `status` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "muscleGroup",
+            "columnName": "muscleGroup",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastTrainedEpochDay",
+            "columnName": "lastTrainedEpochDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "estimatedRecoveryHours",
+            "columnName": "estimatedRecoveryHours",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "volumeLoad",
+            "columnName": "volumeLoad",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rpe",
+            "columnName": "rpe",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sorenessRating",
+            "columnName": "sorenessRating",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_muscle_recovery_muscleGroup",
+            "unique": false,
+            "columnNames": [
+              "muscleGroup"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_muscle_recovery_muscleGroup` ON `${TABLE_NAME}` (`muscleGroup`)"
+          }
+        ]
+      },
+      {
+        "tableName": "workout_exercises",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionStartMs` INTEGER NOT NULL, `exerciseName` TEXT NOT NULL, `sets` INTEGER NOT NULL, `reps` INTEGER NOT NULL, `weightKg` REAL NOT NULL, `volume` REAL NOT NULL, `rpe` INTEGER, `muscleGroups` TEXT NOT NULL, `notes` TEXT, `orderIndex` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionStartMs",
+            "columnName": "sessionStartMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exerciseName",
+            "columnName": "exerciseName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sets",
+            "columnName": "sets",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reps",
+            "columnName": "reps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "weightKg",
+            "columnName": "weightKg",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "volume",
+            "columnName": "volume",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rpe",
+            "columnName": "rpe",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "muscleGroups",
+            "columnName": "muscleGroups",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "orderIndex",
+            "columnName": "orderIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_workout_exercises_sessionStartMs",
+            "unique": false,
+            "columnNames": [
+              "sessionStartMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_workout_exercises_sessionStartMs` ON `${TABLE_NAME}` (`sessionStartMs`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd4aafe2a6c0aca3a51a9ae6b12971070')"
+    ]
+  }
+}

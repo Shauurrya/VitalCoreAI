@@ -119,13 +119,31 @@ data class HistoricalComparison(
 /**
  * Data quality / completeness report produced by DataQualityEngine (A3).
  * Consumed by UI to decide whether to render a score or "Not enough data."
+ *
+ * @param reasons   what is *missing or degraded* — the negatives.
+ * @param positives what is *present and reliable*. Added so a confidence badge can answer
+ *                  "why?" symmetrically. Showing only the negatives made every score look
+ *                  faintly broken even at 95% confidence, because the card had nothing
+ *                  good to say about itself.
+ * @param factors   per-dimension sub-scores (0–1), keyed by [DataQualityEngine.Factor]
+ *                  name, so the debug screen and coach context can inspect the shape of a
+ *                  confidence number rather than just its value.
  */
 data class DataQualityReport(
     val level: Confidence,
     val confidencePercent: Int,
     val reasons: List<String>,            // short human-readable explanations
-    val insufficientData: Boolean         // true → UI shows "Not enough data"
+    val insufficientData: Boolean,        // true → UI shows "Not enough data"
+    val positives: List<String> = emptyList(),
+    val factors: Map<String, Float> = emptyMap()
 ) {
+    /**
+     * The "Why?" block the product spec asks for — positives first, then gaps, each
+     * prefixed so the list reads correctly to a screen reader without relying on colour.
+     */
+    fun whyLines(maxLines: Int = 5): List<String> =
+        (positives.map { "✓ $it" } + reasons.map { "• $it" }).take(maxLines)
+
     companion object {
         /** Sentinel used before DataQualityEngine has run. */
         val UNKNOWN = DataQualityReport(

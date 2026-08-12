@@ -45,11 +45,26 @@ import com.example.vitalcoreai.data.db.entity.*
  *         heart_rate_samples: unique index on timestampMs so onConflict = IGNORE actually
  *                            de-duplicates instead of appending a copy every sync.
  *
- * Migration strategy: fallbackToDestructiveMigration(dropAllTables = true).
- * Correct here because the database is a local cache of Health Connect data and is fully
- * reconstructible from it — the next sync backfills 30 days. Nothing in this database is
- * user-authored except check-ins and journal entries, which are cheap to re-enter relative
- * to maintaining hand-written migrations across a schema still in flux.
+ *   v7 — Persisted V1.1 intelligence outputs on computed_scores:
+ *         forecast (low/high/confidence/drivers/risks), sleep consistency
+ *         (score/label/bedtime SD/wake SD), recovery trends (7/14/30 direction +
+ *         contributors), anomalies (encoded + count), recommendation
+ *         (type/intensity/volume/detail), data-quality factors and positives.
+ *         daily_metrics + newestRecordTimestampMs (freshness input).
+ *         Index on computed_scores.dateEpochDay.
+ *
+ * Migration strategy: **real migrations from v6 onward** — see [Migrations].
+ *
+ * The previous blanket `fallbackToDestructiveMigration(dropAllTables = true)` was justified
+ * on the grounds that this database is a reconstructible cache of Health Connect. That is
+ * true of eight tables and false of four: `check_ins`, `journal_entries`,
+ * `workout_exercises` and `muscle_recovery` are user-authored and exist nowhere else. A
+ * year of journal entries is precisely the data that makes habit correlation meaningful,
+ * and losing it fails silently — the correlation engine simply drops below its minimum
+ * sample size and stops producing insights.
+ *
+ * Destructive fallback is now scoped to versions 1–5 only (see
+ * [Migrations.DESTRUCTIVE_FALLBACK_FROM]).
  */
 @Database(
     entities = [
@@ -66,8 +81,10 @@ import com.example.vitalcoreai.data.db.entity.*
         MuscleRecoveryEntity::class,     // Part 9
         WorkoutExerciseEntity::class     // Part 9 — per-exercise tracking
     ],
-    version = 6,
-    exportSchema = false
+    version = 7,
+    // Exported so MigrationTestHelper can verify each migration against the real schema
+    // rather than against the entities the same build just generated.
+    exportSchema = true
 )
 abstract class VitalCoreDatabase : RoomDatabase() {
     abstract fun dailyMetricsDao(): DailyMetricsDao

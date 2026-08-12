@@ -139,12 +139,12 @@ object HRRecoveryCalculator {
             "Excellent" -> append("This indicates strong parasympathetic reactivation and excellent cardiovascular fitness.")
             "Good" -> append("Your autonomic recovery is healthy and above average.")
             "Normal" -> append("Your heart rate recovery is within the normal range.")
-            "Below Normal" -> append("A drop under 12 bpm can indicate reduced autonomic function. Consistent exercise, better sleep, and stress management can improve this over time.")
+            "Below Normal" -> append("A drop under 12 bpm is below the usual range. Consistent exercise, better sleep, and stress management tend to raise it over time.")
         }
 
         when (trend) {
             TrendDirection.UP -> append(" Your HRR is improving compared to your recent baseline — a sign of increasing fitness.")
-            TrendDirection.DOWN -> append(" Your HRR has declined recently — this may indicate accumulated fatigue, stress, or illness.")
+            TrendDirection.DOWN -> append(" Your HRR is below your recent baseline. Worth watching alongside sleep and training load.")
             TrendDirection.NEUTRAL -> { /* no trend note */ }
         }
     }
