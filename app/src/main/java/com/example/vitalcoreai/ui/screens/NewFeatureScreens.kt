@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -112,7 +114,7 @@ fun CheckInScreen(
 
             // Sliders
             item { CheckInSlider("Energy", "⚡", state.energy, RecoveryAccent, "Exhausted", "Full of energy") { viewModel.setEnergy(it) } }
-            item { CheckInSlider("Stress", "😰", state.stress, VitalRed, "Very relaxed", "Extremely stressed") { viewModel.setStress(it) } }
+            item { CheckInSlider("Stress", "😰", state.stress, AlertRed, "Very relaxed", "Extremely stressed") { viewModel.setStress(it) } }
             item { CheckInSlider("Muscle Soreness", "💪", state.soreness, StrainAccent, "None", "Very sore") { viewModel.setSoreness(it) } }
             item { CheckInSlider("Sleep Quality", "😴", state.sleepQuality, SleepAccent, "Terrible", "Amazing") { viewModel.setSleepQuality(it) } }
             item { CheckInSlider("Mood", "😊", state.mood, BioAgeAccent, "Awful", "Great") { viewModel.setMood(it) } }
@@ -125,7 +127,7 @@ fun CheckInScreen(
                         .fillMaxWidth()
                         .clip(CardShape)
                         .background(SurfaceL1)
-                        .border(1.dp, if (state.illnessFlag) VitalRed.copy(0.5f) else DividerColor, CardShape)
+                        .border(1.dp, if (state.illnessFlag) AlertRed.copy(0.5f) else DividerColor, CardShape)
                         .clickable { viewModel.toggleIllness() }
                         .padding(16.dp)
                 ) {
@@ -134,7 +136,7 @@ fun CheckInScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "Feeling ill?",
+                                "Feeling under the weather?",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                                 color = OnBackground
                             )
@@ -148,8 +150,8 @@ fun CheckInScreen(
                             checked = state.illnessFlag,
                             onCheckedChange = { viewModel.toggleIllness() },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = VitalRed,
-                                checkedTrackColor = VitalRed.copy(0.3f)
+                                checkedThumbColor = AlertRed,
+                                checkedTrackColor = AlertRed.copy(0.3f)
                             )
                         )
                     }
@@ -477,8 +479,8 @@ fun JournalScreen(
                     ) {
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                val color = if (correlation.direction == "positive") ActivityAccent else VitalRed
-                                val icon = if (correlation.direction == "positive") Icons.Filled.TrendingUp else Icons.Filled.TrendingDown
+                                val color = if (correlation.direction == "positive") ActivityAccent else AlertRed
+                                val icon = if (correlation.direction == "positive") Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown
                                 Icon(icon, null, tint = color, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
@@ -556,7 +558,7 @@ fun MuscleRecoveryScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MuscleStatusCountCard("Ready", "$ready", ActivityAccent, Modifier.weight(1f))
                     MuscleStatusCountCard("Recovering", "$recovering", StressAccent, Modifier.weight(1f))
-                    MuscleStatusCountCard("Fatigued", "$fatigued", VitalRed, Modifier.weight(1f))
+                    MuscleStatusCountCard("Fatigued", "$fatigued", AlertRed, Modifier.weight(1f))
                 }
             }
 
@@ -616,7 +618,7 @@ private fun MuscleGroupCard(status: MuscleRecoveryEngine.MuscleStatus) {
     val (statusColor, statusIcon) = when (status.status) {
         MuscleRecoveryEngine.RecoveryStatus.READY      -> ActivityAccent to Icons.Filled.CheckCircle
         MuscleRecoveryEngine.RecoveryStatus.RECOVERING  -> StressAccent to Icons.Filled.Schedule
-        MuscleRecoveryEngine.RecoveryStatus.FATIGUED    -> VitalRed to Icons.Filled.Warning
+        MuscleRecoveryEngine.RecoveryStatus.FATIGUED    -> AlertRed to Icons.Filled.Warning
     }
 
     Box(
@@ -711,11 +713,12 @@ fun EnergyBankScreen(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    AnimatedScoreRing(
-                        score = state.score ?: 0f,
+                    PercentRing(
+                        value = state.score,
                         label = "ENERGY",
                         size = 180.dp,
-                        strokeWidth = 14.dp
+                        strokeWidth = 14.dp,
+                        accent = ActivityAccent
                     )
                 }
             }
@@ -744,7 +747,7 @@ fun EnergyBankScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("14-Day Energy Bank", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = BioAgeAccent)
+                            TrendLineChart(values = state.chartValues, accent = BioAgeAccent)
                         }
                     }
                 }
@@ -761,12 +764,7 @@ fun EnergyBankScreen(
                             Text("Contributing Factors", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
                             state.breakdown.forEach { factor ->
-                                BreakdownRow(
-                                    name = factor.name,
-                                    weight = factor.contribution,
-                                    subScore = factor.score,
-                                    description = factor.description
-                                )
+                                BreakdownRow(factor = factor)
                                 HorizontalDivider(color = SurfaceL3, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
                             }
                         }

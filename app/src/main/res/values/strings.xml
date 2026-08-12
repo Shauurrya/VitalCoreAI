@@ -1,3 +1,67 @@
 <resources>
     <string name="app_name">VitalCore AI</string>
+
+    <!--
+      T-20 — safety-critical copy.
+
+      Scope note: this file holds the strings whose exact wording is a *safety* property —
+      disclaimers, estimate framing, and the onboarding text that sets expectations about
+      what the app can and cannot know. Those are the strings a reviewer needs to be able to
+      find in one place, and the ones a careless edit does real harm to.
+
+      The rest of the app's UI text is still inline in Compose. Moving ~1,000 further
+      literals out of single-locale screen code would be a large mechanical change with real
+      regression risk and no functional gain, so it is deliberately not part of this pass —
+      see docs/V1.1_PLAN.md.
+
+      Forbidden anywhere in user-facing copy: diagnose, illness, sick, infection, disease,
+      syndrome, heart problem, "you have", symptom. Enforced by MedicalSafetyTest.
+    -->
+
+    <!-- Disclaimers -->
+    <string name="disclaimer_not_medical">VitalCore AI is a wellness and fitness tool. It is not a medical device and does not provide medical advice.</string>
+    <string name="disclaimer_anomaly">This is a pattern worth monitoring, not a diagnosis.</string>
+    <string name="disclaimer_forecast">A projection from your recent patterns, not a prediction.</string>
+    <string name="disclaimer_fitness_age">A wellness estimate based on published fitness research — not a medical or clinical measurement.</string>
+    <string name="disclaimer_vo2max">Estimated from resting heart rate — not a measurement.</string>
+    <string name="disclaimer_learned_recovery">Learned from your own training gaps — a behavioural estimate, not a physiological measurement.</string>
+
+    <!-- Estimate labels -->
+    <string name="label_fitness_age">Fitness Age (estimate)</string>
+    <string name="label_vo2max">VO₂ Max (estimate)</string>
+
+    <!-- Empty / insufficient-data states. Never a zero. -->
+    <string name="empty_forecast">Forecast available after 5 days of data</string>
+    <string name="empty_recommendation">A recommendation appears once today\'s scores are computed</string>
+    <string name="empty_baseline">VitalCore learns your baseline over 14–30 days. Early scores carry lower confidence.</string>
+
+    <!-- Onboarding (T-18) -->
+    <string name="onboarding_welcome_title">Welcome to VitalCore</string>
+    <string name="onboarding_welcome_body">Your health data stays on this phone. VitalCore has no account, no server and no internet permission — every score is computed on the device from data you already have in Health Connect.</string>
+    <string name="onboarding_permissions_title">Connect Health Connect</string>
+    <string name="onboarding_permissions_body">VitalCore reads sleep, heart rate, steps and workouts. You can grant some and refuse others; anything you refuse is simply left out, and the confidence badge will say so.</string>
+    <string name="onboarding_goal_title">What are you training for?</string>
+    <string name="onboarding_goal_body">This nudges the workout recommendation. It never overrides a recovery signal.</string>
+    <string name="onboarding_wearable_title">Pair your watch</string>
+    <string name="onboarding_wearable_body">Open your watch\'s companion app — Samsung Health, Google Fit, Fitbit or Garmin Connect — and turn on syncing to Health Connect. VitalCore reads whatever lands there.</string>
+    <string name="onboarding_checkin_title">Daily check-in</string>
+    <string name="onboarding_checkin_body">Ten seconds each morning on energy, stress and soreness. It is optional, and it measurably sharpens the recommendation because no sensor can see how you feel.</string>
+    <string name="onboarding_baseline_title">Learning your normal</string>
+    <string name="onboarding_baseline_body">Every score is relative to you, not to a population average. That takes 14–30 days to settle. Until then scores are shown with lower confidence rather than hidden.</string>
+    <string name="onboarding_coach_title">Your coach</string>
+    <string name="onboarding_coach_body">The coach answers from a rules engine running on this device. Nothing you record is sent anywhere. If a cloud model is ever offered, it will be opt-in and you will be asked first.</string>
+    <string name="onboarding_notifications_title">Notifications</string>
+    <string name="onboarding_notifications_body">A morning summary when your scores are ready, and a check-in reminder. Both are optional and can be changed later in Settings.</string>
+    <string name="onboarding_ready_title">You\'re set</string>
+    <string name="onboarding_ready_body">Scores appear after the first sync. Triple-tap the title on Home in a debug build to open the developer screen.</string>
+
+    <!-- Security (T-17) -->
+    <string name="biometric_title">VitalCore</string>
+    <string name="biometric_subtitle">Unlock to view health data</string>
+    <string name="biometric_negative">Cancel</string>
+    <string name="biometric_setting_title">Lock with fingerprint or face</string>
+    <string name="biometric_setting_body">Require your device biometric each time VitalCore opens. Your data is already local-only; this stops someone holding your unlocked phone from reading it.</string>
+    <string name="biometric_unavailable">No biometric is enrolled on this device.</string>
+    <string name="biometric_locked_title">VitalCore is locked</string>
+    <string name="biometric_unlock_action">Unlock</string>
 </resources>

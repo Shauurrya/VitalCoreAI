@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -36,10 +37,17 @@ import com.example.vitalcoreai.theme.*
 import com.example.vitalcoreai.ui.components.*
 import com.example.vitalcoreai.ui.navigation.Routes
 import com.example.vitalcoreai.ui.viewmodel.HomeUiState
+import com.example.vitalcoreai.ui.viewmodel.Momentum
 import com.example.vitalcoreai.ui.viewmodel.HomeViewModel
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import com.example.vitalcoreai.core.time.VitalTime
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import com.example.vitalcoreai.BuildConfig
 
 // ─── 3-Tab Bottom Nav (Whoop-style: Overview, Strain, Recovery) ──────────────
 
@@ -76,7 +84,28 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    // T-14 — hidden developer gesture. Three taps inside 300 ms on the
+                    // brand mark, and only in a debug build: a release APK has no way in
+                    // at all, rather than a way in that happens to be obscure.
+                    var debugTaps by remember { mutableIntStateOf(0) }
+                    var lastTapMs by remember { mutableLongStateOf(0L) }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = {
+                                    if (!BuildConfig.DEBUG) return@detectTapGestures
+                                    val now = VitalTime.nowMs()
+                                    debugTaps = if (now - lastTapMs < 300) debugTaps + 1 else 1
+                                    lastTapMs = now
+                                    if (debugTaps >= 3) {
+                                        debugTaps = 0
+                                        onNavigate(Routes.DEBUG)
+                                    }
+                                })
+                            }
+                    ) {
                         Text(
                             "VitalCore AI",
                             style = MaterialTheme.typography.titleLarge.copy(
@@ -86,7 +115,7 @@ fun HomeScreen(
                             color = OnBackground
                         )
                         Text(
-                            LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMMM d")),
+                            VitalTime.today().format(DateTimeFormatter.ofPattern("EEEE, MMMM d")),
                             style = MaterialTheme.typography.labelSmall,
                             color = OnSurfaceDim
                         )
@@ -183,10 +212,13 @@ fun HomeScreen(
             // ── Momentum Indicators (B1) ──────────────────────────────────────
             if (state.recoveryMomentum != null || state.sleepMomentum != null || state.trainingMomentum != null) {
                 item {
-                    MomentumStrip(
-                        recoveryMomentum = state.recoveryMomentum,
-                        sleepMomentum = state.sleepMomentum,
-                        trainingMomentum = state.trainingMomentum
+                    // MomentumRow takes the parsed enum rather than raw column strings, so a
+                    // value the database never wrote lands on UNKNOWN instead of rendering
+                    // an arrow for a direction nothing computed.
+                    MomentumRow(
+                        recovery = Momentum.parse(state.recoveryMomentum),
+                        sleep = Momentum.parse(state.sleepMomentum),
+                        strain = Momentum.parse(state.trainingMomentum)
                     )
                 }
             }
@@ -258,7 +290,7 @@ fun HomeScreen(
                     val ebColor = when {
                         eb >= 70 -> ActivityAccent
                         eb >= 40 -> StressAccent
-                        else -> VitalRed
+                        else -> AlertRed
                     }
                     Box(
                         modifier = Modifier
@@ -270,11 +302,11 @@ fun HomeScreen(
                             .padding(16.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            AnimatedScoreRing(
-                                score = eb,
-                                label = "",
+                            CompactRing(
+                                value = eb,
                                 size = 48.dp,
-                                strokeWidth = 5.dp
+                                strokeWidth = 5.dp,
+                                color = ebColor
                             )
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
@@ -298,6 +330,40 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+
+            // ── V1.1 (T-13) — the persisted engine output ─────────────────────
+            //
+            // Ordered as the product spec asks: what to do today, then how tonight's
+            // sleep has been going, then where the trend is heading, then anything
+            // unusual, and the forecast last because it is the least actionable.
+            //
+            // Every one of these degrades on its own: a card with nothing to say either
+            // states why (forecast, recommendation) or does not render at all
+            // (anomalies, trends). None of them renders a zero in place of a null.
+
+            item {
+                RecommendationCard(recommendation = state.recommendation)
+            }
+
+            state.sleepConsistency?.let {
+                item { SleepConsistencyCard(state = it) }
+            }
+
+            // Rendered only when a window has enough coverage to have a direction at
+            // all; TrendState.isMeaningful has already filtered INSUFFICIENT_DATA out.
+            items(state.trends, key = { it.window }) { trend ->
+                TrendCard(trend = trend)
+            }
+
+            // Deliberately absent rather than "No anomalies" — a reassurance the engine
+            // is not entitled to give is worse than saying nothing.
+            items(state.anomalies, key = { "${it.metric}:${it.title}" }) { anomaly ->
+                AnomalyCard(anomaly = anomaly)
+            }
+
+            item {
+                ForecastCard(forecast = state.forecast)
             }
 
             // ── Key Insight Card ──────────────────────────────────────────────
@@ -373,12 +439,6 @@ fun HomeScreen(
                 }
             }
 
-            // Quick Actions Row
-            item {
-                Spacer(Modifier.height(8.dp))
-                QuickActionsRow(onNavigate = onNavigate)
-            }
-
             item { Spacer(Modifier.height(24.dp)) }
         }
     }
@@ -416,8 +476,8 @@ private fun MediumRingCard(
                 color = OnSurfaceDim
             )
             Spacer(Modifier.height(8.dp))
-            AnimatedScoreRing(
-                score       = score ?: 0f,
+            PercentRing(
+                value       = score,
                 label       = label,
                 size        = 76.dp,
                 strokeWidth = 7.dp
@@ -498,7 +558,7 @@ private fun CoachInsightRow(
     onClick: () -> Unit
 ) {
     val accentColor = when (insight.type) {
-        CoachEngine.InsightType.WARNING  -> VitalRed
+        CoachEngine.InsightType.WARNING  -> AlertRed
         CoachEngine.InsightType.SLEEP    -> SleepAccent
         CoachEngine.InsightType.TRAINING -> StrainAccent
         CoachEngine.InsightType.ACTIVITY -> ActivityAccent
@@ -646,9 +706,9 @@ private fun healthStatusColor(state: HomeUiState): Color {
         scores.recoveryScore, scores.sleepScore, scores.activityScore
     ).average().takeIf { !it.isNaN() } ?: return OnSurfaceMuted
     return when {
-        avg >= 70 -> VitalGreen
-        avg >= 50 -> VitalAmber
-        else -> VitalRed
+        avg >= 70 -> ActivityAccent
+        avg >= 50 -> StressAccent
+        else -> AlertRed
     }
 }
 
@@ -664,9 +724,9 @@ private fun stressHeadline(state: HomeUiState): String {
 private fun stressStatusColor(state: HomeUiState): Color {
     val s = state.latestScores?.stressScore ?: return OnSurfaceMuted
     return when {
-        s >= 70 -> VitalRed
-        s >= 45 -> VitalAmber
-        else -> VitalGreen
+        s >= 70 -> AlertRed
+        s >= 45 -> StressAccent
+        else -> ActivityAccent
     }
 }
 
@@ -680,9 +740,9 @@ private fun buildSleepTimeRange(bedMinute: Int?, wakeMinute: Int?): String {
 
 private fun buildSessionTimeRange(session: ExerciseSessionEntity): String {
     val start = java.time.Instant.ofEpochMilli(session.startMs)
-        .atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+        .let { VitalTime.zonedOf(it.toEpochMilli()) }.toLocalTime()
     val end = java.time.Instant.ofEpochMilli(session.endMs)
-        .atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+        .let { VitalTime.zonedOf(it.toEpochMilli()) }.toLocalTime()
     val fmt = DateTimeFormatter.ofPattern("h:mm a")
     return "${start.format(fmt)} – ${end.format(fmt)}"
 }
@@ -692,7 +752,7 @@ private fun exerciseIcon(type: String): ImageVector = when {
     type.contains("BIKE", ignoreCase = true) ||
     type.contains("CYCL", ignoreCase = true)  -> Icons.AutoMirrored.Filled.DirectionsBike
     type.contains("SWIM", ignoreCase = true)  -> Icons.Filled.Pool
-    type.contains("WALK", ignoreCase = true)  -> Icons.Filled.DirectionsWalk
+    type.contains("WALK", ignoreCase = true)  -> Icons.AutoMirrored.Filled.DirectionsWalk
     type.contains("YOGA", ignoreCase = true) ||
     type.contains("MEDITAT", ignoreCase = true) -> Icons.Filled.SelfImprovement
     else -> Icons.Filled.FitnessCenter
