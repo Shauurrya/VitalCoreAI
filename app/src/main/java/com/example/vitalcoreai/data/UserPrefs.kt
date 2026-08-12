@@ -25,11 +25,21 @@ object UserPrefs {
     private const val KEY_SLEEP_NEED_HOURS = "sleep_need_hours"
     private const val KEY_STEP_GOAL = "step_goal"
     private const val KEY_MAX_HR_AUTO = "max_hr_auto_derived"
+    private const val KEY_TRAINING_GOAL = "training_goal"
+    private const val KEY_ONBOARDING_DONE = "onboarding_complete_v2"
+    private const val KEY_BIOMETRIC_LOCK = "biometric_lock_enabled"
+    private const val KEY_COACH_REMOTE_OPT_IN = "coach_remote_opt_in"
+    private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
+    private const val KEY_CHECK_IN_REMINDER = "check_in_reminder_enabled"
+    private const val KEY_USER_NAME = "user_name"
 
     const val DEFAULT_AGE = 30
     const val DEFAULT_MAX_HR = 190
     const val DEFAULT_SLEEP_NEED_HOURS = 8f
     const val DEFAULT_STEP_GOAL = 7500
+
+    /** Matches `RecommendationEngine.Goal`. Stored by name so the enum can be reordered safely. */
+    const val DEFAULT_TRAINING_GOAL = "GENERAL_FITNESS"
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -76,4 +86,69 @@ object UserPrefs {
 
     fun stepGoal(context: Context): Int =
         prefs(context).getInt(KEY_STEP_GOAL, DEFAULT_STEP_GOAL)
+
+    // ── Onboarding-set preferences (T-18) ────────────────────────────────────
+
+    /**
+     * The user's stated training emphasis, as a `RecommendationEngine.Goal` name.
+     *
+     * Returned as a String rather than the enum so this file stays free of an analytics
+     * import; the caller resolves it with `enumValueOf` behind a `runCatching`, which also
+     * makes a value written by an older build harmless.
+     */
+    fun trainingGoal(context: Context): String =
+        prefs(context).getString(KEY_TRAINING_GOAL, DEFAULT_TRAINING_GOAL) ?: DEFAULT_TRAINING_GOAL
+
+    fun setTrainingGoal(context: Context, goal: String) {
+        prefs(context).edit().putString(KEY_TRAINING_GOAL, goal).apply()
+    }
+
+    fun userName(context: Context): String? =
+        prefs(context).getString(KEY_USER_NAME, null)?.takeIf { it.isNotBlank() }
+
+    fun setUserName(context: Context, name: String) {
+        prefs(context).edit().putString(KEY_USER_NAME, name.trim()).apply()
+    }
+
+    fun onboardingComplete(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ONBOARDING_DONE, false)
+
+    fun setOnboardingComplete(context: Context, complete: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ONBOARDING_DONE, complete).apply()
+    }
+
+    fun biometricLockEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BIOMETRIC_LOCK, false)
+
+    fun setBiometricLockEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BIOMETRIC_LOCK, enabled).apply()
+    }
+
+    /**
+     * Whether the user has opted in to sending context to a remote coach model.
+     *
+     * Defaults to **false** and is currently read-only in effect: no network layer ships in
+     * v1.1, so the deterministic coach answers every question. The flag exists so the consent
+     * is recorded before any egress path is ever added, never inferred afterwards.
+     */
+    fun remoteCoachOptIn(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_COACH_REMOTE_OPT_IN, false)
+
+    fun setRemoteCoachOptIn(context: Context, optIn: Boolean) {
+        prefs(context).edit().putBoolean(KEY_COACH_REMOTE_OPT_IN, optIn).apply()
+    }
+
+    fun notificationsEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFICATIONS_ENABLED, true)
+
+    fun setNotificationsEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFICATIONS_ENABLED, enabled).apply()
+    }
+
+    fun checkInReminderEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CHECK_IN_REMINDER, true)
+
+    fun setCheckInReminderEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CHECK_IN_REMINDER, enabled).apply()
+    }
 }

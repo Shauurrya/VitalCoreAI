@@ -18,6 +18,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.*
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.example.vitalcoreai.core.time.VitalTime
 
 /**
  * Health Connect access layer.
@@ -39,7 +40,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class HealthConnectManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     companion object {
         private const val TAG = "HealthConnectManager"
@@ -168,7 +169,7 @@ class HealthConnectManager @Inject constructor(
      */
     suspend fun capabilityReport(): List<DataSourceStatus> {
         val granted = grantedPermissions()
-        val end = LocalDate.now()
+        val end = VitalTime.today()
         val start = end.minusDays(30)
 
         suspend fun probe(
@@ -253,7 +254,7 @@ class HealthConnectManager @Inject constructor(
     }
 
     private fun dayRange(startDay: LocalDate, endDay: LocalDate): TimeRangeFilter {
-        val zone = ZoneId.systemDefault()
+        val zone = VitalTime.zone()
         return TimeRangeFilter.between(
             startDay.atStartOfDay(zone).toInstant(),
             endDay.plusDays(1).atStartOfDay(zone).toInstant()
@@ -332,7 +333,7 @@ class HealthConnectManager @Inject constructor(
             readAll(RestingHeartRateRecord::class, dayRange(startDay, endDay))
                 .map { record ->
                     RestingHRData(
-                        dateEpochDay = record.time.atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay(),
+                        dateEpochDay = VitalTime.epochDayOf(record.time.toEpochMilli()),
                         bpm = record.beatsPerMinute.toInt()
                     )
                 }
@@ -385,7 +386,7 @@ class HealthConnectManager @Inject constructor(
         sleep: SleepData?
     ): RestingHRResult? {
         if (hrPoints.isEmpty()) return null
-        val zone = ZoneId.systemDefault()
+        val zone = VitalTime.zone()
 
         val windowStart: Instant
         val windowEnd: Instant
@@ -476,7 +477,7 @@ class HealthConnectManager @Inject constructor(
      */
     suspend fun readSleepSessions(startDay: LocalDate, endDay: LocalDate): List<SleepData> =
         safeRead(emptyList()) {
-            val zone = ZoneId.systemDefault()
+            val zone = VitalTime.zone()
             readAll(SleepSessionRecord::class, dayRange(startDay, endDay))
                 .map { record ->
                     val durationMin = ((record.endTime.epochSecond - record.startTime.epochSecond) / 60).toInt()
@@ -618,7 +619,7 @@ class HealthConnectManager @Inject constructor(
      * applying no modifier at all (constraint 4).
      */
     suspend fun readSpO2ForDay(day: LocalDate, sleep: SleepData?): SpO2Summary? = safeRead(null) {
-        val zone = ZoneId.systemDefault()
+        val zone = VitalTime.zone()
         val records = readAll(OxygenSaturationRecord::class, dayRange(day.minusDays(1), day))
         if (records.isEmpty()) return@safeRead null
 
@@ -720,7 +721,7 @@ class HealthConnectManager @Inject constructor(
 
     /** Samsung Health computes its own VO₂ max; prefer it over our estimate when present. */
     suspend fun readLatestVo2Max(): Float? = safeRead(null) {
-        readAll(Vo2MaxRecord::class, dayRange(LocalDate.now().minusDays(90), LocalDate.now()))
+        readAll(Vo2MaxRecord::class, dayRange(VitalTime.today().minusDays(90), VitalTime.today()))
             .maxByOrNull { it.time }?.vo2MillilitersPerMinuteKilogram?.toFloat()
     }
 
@@ -771,7 +772,7 @@ class HealthConnectManager @Inject constructor(
                     ?.get(DistanceRecord.DISTANCE_TOTAL)
                     ?.inMeters?.toFloat()?.takeIf { it > 0f }
 
-                val startOffset = record.startZoneOffset ?: ZoneId.systemDefault().rules.getOffset(record.startTime)
+                val startOffset = record.startZoneOffset ?: VitalTime.zone().rules.getOffset(record.startTime)
 
                 ExerciseSessionData(
                     dateEpochDay = record.startTime.atOffset(startOffset).toLocalDate().toEpochDay(),
@@ -801,7 +802,7 @@ class HealthConnectManager @Inject constructor(
             val weights = readAll(WeightRecord::class, range)
             if (weights.isEmpty()) return@safeRead emptyList()
             val bodyFats = readAll(BodyFatRecord::class, range)
-            val zone = ZoneId.systemDefault()
+            val zone = VitalTime.zone()
 
             weights.sortedBy { it.time }.map { record ->
                 val day = record.time.atZone(zone).toLocalDate().toEpochDay()
@@ -830,7 +831,7 @@ class HealthConnectManager @Inject constructor(
         ReplaceWith("readWeightSeries(startDay, endDay)")
     )
     suspend fun readLatestWeight(): WeightData? =
-        readWeightSeries(LocalDate.now().minusDays(90), LocalDate.now()).lastOrNull()
+        readWeightSeries(VitalTime.today().minusDays(90), VitalTime.today()).lastOrNull()
 
     /**
      * Health Connect stores exercise type as an int constant. Storing the raw number

@@ -1,12 +1,17 @@
 package com.example.vitalcoreai.notifications
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.example.vitalcoreai.data.UserPrefs
 import com.example.vitalcoreai.MainActivity
 import com.example.vitalcoreai.R
 
@@ -91,7 +96,7 @@ object NotificationScheduler {
             .setContentIntent(makePendingIntent(context, DEST_DASHBOARD))
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(ID_DAILY_SUMMARY, n)
+        post(context, ID_DAILY_SUMMARY, n)
     }
 
     fun sendWeeklySummary(context: Context, weeklyScore: Float, delta: Float) {
@@ -109,7 +114,7 @@ object NotificationScheduler {
             .setContentIntent(makePendingIntent(context, DEST_REPORTS))
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(ID_WEEKLY_REPORT, n)
+        post(context, ID_WEEKLY_REPORT, n)
     }
 
     fun sendAchievement(
@@ -128,7 +133,7 @@ object NotificationScheduler {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-        NotificationManagerCompat.from(context).notify(ID_ACHIEVEMENT_BASE + notificationId, n)
+        post(context, ID_ACHIEVEMENT_BASE + notificationId, n)
     }
 
     fun sendCoachAlert(context: Context, headline: String, body: String) {
@@ -140,10 +145,44 @@ object NotificationScheduler {
             .setContentIntent(makePendingIntent(context, DEST_DASHBOARD))
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(ID_COACH_ALERT, n)
+        post(context, ID_COACH_ALERT, n)
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
+
+    /**
+     * The single place a notification is actually posted.
+     *
+     * Every `notify()` call used to be unguarded. On Android 13+ that throws
+     * `SecurityException` when POST_NOTIFICATIONS has not been granted — and the whole point
+     * of the notification step in onboarding is that the user may decline it, so this is a
+     * path a user can reach by doing exactly what the UI invites them to do. It fires from a
+     * WorkManager worker, where the crash surfaces as a silently failed sync rather than
+     * anything the user could report usefully.
+     *
+     * Two gates, in order:
+     *  1. the user's own preference, so turning notifications off in Settings actually stops
+     *     them rather than merely hiding a toggle;
+     *  2. the OS permission, checked rather than assumed.
+     *
+     * `areNotificationsEnabled()` covers both the runtime permission and a channel the user
+     * has blocked from system settings, which a bare permission check would miss.
+     */
+    private fun post(context: Context, id: Int, notification: android.app.Notification) {
+        if (!UserPrefs.notificationsEnabled(context)) return
+
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        // Belt and braces: the permission can be revoked between the check above and the
+        // call below, and a revoked permission must not take the sync down with it.
+        runCatching { manager.notify(id, notification) }
+    }
+
 
     private fun makePendingIntent(context: Context, destination: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
