@@ -174,7 +174,7 @@ object CoachEngine {
             input.energyBankScore != null && input.energyBankScore >= 85f ->
                 insights += CoachInsight(
                     title = "Energy Reserves Full ⚡",
-                    body = "Energy bank at ${input.energyBankScore.toInt()}/100. You have the capacity for a demanding session today " +
+                    body = "Energy bank at ${input.energyBankScore.toInt()}/100 — enough for a demanding session today " +
                             "without risking overtraining.",
                     type = InsightType.TRAINING,
                     actionable = false
@@ -251,7 +251,7 @@ object CoachEngine {
     private fun recoveryHigh(input: CoachInput): String =
         "All recovery indicators look strong. ${
             if (input.readinessScore != null && input.readinessScore > 80f) 
-                "Readiness is also high at ${input.readinessScore.toInt()} — an excellent day to push hard if you have a workout planned." 
+                "Readiness is also high at ${input.readinessScore.toInt()} — an excellent day to push hard if a workout is planned." 
             else "A good day for moderate training."
         }"
 

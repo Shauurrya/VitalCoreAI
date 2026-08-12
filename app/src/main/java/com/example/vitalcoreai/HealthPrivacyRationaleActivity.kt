@@ -57,7 +57,7 @@ class HealthPrivacyRationaleActivity : ComponentActivity() {
                         Icon(
                             imageVector = Icons.Filled.Favorite,
                             contentDescription = null,
-                            tint = VitalBlue,
+                            tint = RecoveryAccent,
                             modifier = Modifier.size(56.dp)
                         )
 
@@ -83,7 +83,7 @@ VitalCore AI reads the following data types from Health Connect, synced from you
 • Total Calories Burned — activity intensity and energy balance
 • Exercise Sessions — training load and ACWR calculation
 • Oxygen Saturation (SpO₂) — stress and recovery quality
-• Weight & Body Fat — Biological Age and VO₂ Max estimation
+• Weight & Body Fat — Fitness Age and VO₂ Max estimates
 
 HRV (Heart Rate Variability) and Skin Temperature are explicitly NOT read.
                             """.trimIndent()
@@ -127,7 +127,7 @@ You can revoke access at any time via Health Connect → App permissions → Vit
 
                         Button(
                             onClick = { finish() },
-                            colors = ButtonDefaults.buttonColors(containerColor = VitalBlue),
+                            colors = ButtonDefaults.buttonColors(containerColor = RecoveryAccent),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Got it", color = Background, style = MaterialTheme.typography.labelLarge)
@@ -152,7 +152,7 @@ private fun RationaleSection(title: String, body: String) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = VitalBlue
+                color = RecoveryAccent
             )
             Spacer(Modifier.height(8.dp))
             Text(

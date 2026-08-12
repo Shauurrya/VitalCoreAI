@@ -32,7 +32,7 @@ import com.example.vitalcoreai.ui.viewmodel.*
 private fun ScoreDetailScreen(
     title: String,
     state: ScoreDetailUiState,
-    chartColor: androidx.compose.ui.graphics.Color = VitalBlue,
+    chartColor: androidx.compose.ui.graphics.Color = RecoveryAccent,
     onBack: () -> Unit
 ) {
     Scaffold(
@@ -63,8 +63,8 @@ private fun ScoreDetailScreen(
             // Big ring + confidence
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    AnimatedScoreRing(
-                        score = state.score ?: 0f,
+                    PercentRing(
+                        value = state.score,
                         label = title.uppercase(),
                         size = 150.dp
                     )
@@ -73,7 +73,7 @@ private fun ScoreDetailScreen(
                             Text(
                                 "${it.toInt()} / 100",
                                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = scoreColor(it)
+                                color = recoveryTierColor(it)
                             )
                         } ?: Text("No data", style = MaterialTheme.typography.headlineMedium, color = OnSurfaceMuted)
                         ConfidenceBadge(state.confidence)
@@ -100,7 +100,7 @@ private fun ScoreDetailScreen(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text("14-Day Trend", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = chartColor)
+                            TrendLineChart(values = state.chartValues, accent = chartColor)
                         }
                     }
                 }
@@ -114,12 +114,7 @@ private fun ScoreDetailScreen(
                             Text("Score Breakdown", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
                             state.breakdown.forEach { factor ->
-                                BreakdownRow(
-                                    name = factor.name,
-                                    weight = factor.contribution,
-                                    subScore = factor.score,
-                                    description = factor.description
-                                )
+                                BreakdownRow(factor = factor)
                                 HorizontalDivider(color = SurfaceL3, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
                             }
                         }
@@ -177,11 +172,12 @@ fun SleepScreen(
             // Score ring
             item {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    AnimatedScoreRing(
-                        score = state.score ?: 0f,
+                    PercentRing(
+                        value = state.score,
                         label = "SLEEP",
                         size = 160.dp,
-                        strokeWidth = 12.dp
+                        strokeWidth = 12.dp,
+                        accent = SleepAccent
                     )
                 }
             }
@@ -211,7 +207,7 @@ fun SleepScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("14-Day Sleep Score", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = SleepAccent)
+                            TrendLineChart(values = state.chartValues, accent = SleepAccent)
                         }
                     }
                 }
@@ -225,7 +221,7 @@ fun SleepScreen(
                             Text("Score Breakdown", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
                             state.breakdown.forEach { factor ->
-                                BreakdownRow(factor.name, factor.contribution, factor.score, factor.description)
+                                BreakdownRow(factor = factor)
                                 HorizontalDivider(color = SurfaceL3, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
                             }
                         }
@@ -262,7 +258,7 @@ fun SleepScreen(
                                 label = "Last Night",
                                 value = if (sleepDebt.lastNightMinutes != null)
                                     "${sleepDebt.lastNightMinutes!! / 60}h ${sleepDebt.lastNightMinutes!! % 60}m" else "—",
-                                color = if (sleepDebt.dailyDeficit > 0) VitalRed else ActivityAccent,
+                                color = if (sleepDebt.dailyDeficit > 0) AlertRed else ActivityAccent,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -275,14 +271,14 @@ fun SleepScreen(
                                 value = if (sleepDebt.dailyDeficit > 0)
                                     "-${sleepDebt.dailyDeficit / 60}h ${sleepDebt.dailyDeficit % 60}m"
                                 else "+${(-sleepDebt.dailyDeficit) / 60}h ${(-sleepDebt.dailyDeficit) % 60}m",
-                                color = if (sleepDebt.dailyDeficit > 0) VitalRed else ActivityAccent,
+                                color = if (sleepDebt.dailyDeficit > 0) AlertRed else ActivityAccent,
                                 modifier = Modifier.weight(1f)
                             )
                             SleepDebtCard(
                                 label = "7-Day Debt",
                                 value = "${sleepDebt.rollingDebtMinutes / 60}h ${sleepDebt.rollingDebtMinutes % 60}m",
                                 color = when {
-                                    sleepDebt.rollingDebtMinutes > 300 -> VitalRed
+                                    sleepDebt.rollingDebtMinutes > 300 -> AlertRed
                                     sleepDebt.rollingDebtMinutes > 120 -> StressAccent
                                     else -> ActivityAccent
                                 },
@@ -368,7 +364,7 @@ fun HeartScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("30-Day Resting HR", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = VitalRed)
+                            TrendLineChart(values = state.chartValues, accent = AlertRed)
                         }
                     }
                 }
@@ -396,7 +392,7 @@ internal fun MetricStatCard(label: String, value: String, unit: String, modifier
         Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceDim, maxLines = 2)
             Spacer(Modifier.height(4.dp))
-            Text(value, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = VitalRed)
+            Text(value, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = AlertRed)
             Text(unit, style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
         }
     }

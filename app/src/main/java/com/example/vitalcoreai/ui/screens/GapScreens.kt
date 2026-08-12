@@ -37,6 +37,7 @@ import com.example.vitalcoreai.ui.viewmodel.*
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.example.vitalcoreai.core.time.VitalTime
 
 // ═════════════════════════════════════════════════════════════════════════════
 // SCREEN 1 — WORKOUT HISTORY (Part 17, screen 6)
@@ -132,7 +133,7 @@ private fun WorkoutHistoryCard(
     val accentColor = exerciseColor(session.exerciseType)
     val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
     val dateFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
-    val startTime = Instant.ofEpochMilli(session.startMs).atZone(ZoneId.systemDefault())
+    val startTime = VitalTime.zonedOf(session.startMs)
 
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -223,8 +224,8 @@ fun WorkoutDetailScreen(
             val accentColor = exerciseColor(session.exerciseType)
             val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
             val dateFmt = DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy")
-            val startTime = Instant.ofEpochMilli(session.startMs).atZone(ZoneId.systemDefault())
-            val endTime = Instant.ofEpochMilli(session.endMs).atZone(ZoneId.systemDefault())
+            val startTime = VitalTime.zonedOf(session.startMs)
+            val endTime = VitalTime.zonedOf(session.endMs)
 
             Column(
                 modifier = Modifier
@@ -295,7 +296,7 @@ fun WorkoutDetailScreen(
                                 MetricBox("Avg HR", "$it bpm", RecoveryAccent)
                             }
                             session.maxHR?.let {
-                                MetricBox("Max HR", "$it bpm", VitalRed)
+                                MetricBox("Max HR", "$it bpm", AlertRed)
                             }
                             session.trainingLoadNormalized?.let { load ->
                                 MetricBox("Load", "%.0f".format(load * 100), StressAccent)
@@ -315,8 +316,11 @@ fun WorkoutDetailScreen(
                                 fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(12.dp))
 
+                            // The `if (session.zone1Pct != null)` guard above already smart-casts
+                            // this one, so its elvis was dead code. The other four are still
+                            // genuinely nullable here.
                             val zones = listOf(
-                                "Zone 1 (Recovery)" to (session.zone1Pct ?: 0f),
+                                "Zone 1 (Recovery)" to session.zone1Pct,
                                 "Zone 2 (Endurance)" to (session.zone2Pct ?: 0f),
                                 "Zone 3 (Tempo)" to (session.zone3Pct ?: 0f),
                                 "Zone 4 (Threshold)" to (session.zone4Pct ?: 0f),
@@ -577,7 +581,7 @@ fun HRRScreen(
                                 state.latestHrr1!! >= 40 -> ActivityAccent
                                 state.latestHrr1!! >= 25 -> RecoveryAccent
                                 state.latestHrr1!! >= 12 -> StressAccent
-                                else -> VitalRed
+                                else -> AlertRed
                             }
 
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(140.dp)) {
@@ -617,7 +621,7 @@ fun HRRScreen(
                             }
                             val trendColor = when (state.trend) {
                                 "IMPROVING" -> ActivityAccent
-                                "DECLINING" -> VitalRed
+                                "DECLINING" -> AlertRed
                                 else -> OnSurfaceDim
                             }
                             Text(trendIcon, color = trendColor, fontSize = 14.sp)
@@ -794,7 +798,7 @@ fun BaselinesScreen(
                             state.overallCalibrationDays >= 30 -> ActivityAccent
                             state.overallCalibrationDays >= 14 -> RecoveryAccent
                             state.overallCalibrationDays >= 7 -> StressAccent
-                            else -> VitalRed
+                            else -> AlertRed
                         }
 
                         // Progress ring
@@ -863,7 +867,7 @@ fun BaselinesScreen(
                                     val confColor = when (item.confidence) {
                                         "HIGH" -> ActivityAccent
                                         "MEDIUM" -> StressAccent
-                                        else -> VitalRed
+                                        else -> AlertRed
                                     }
                                     Text(item.confidence, color = confColor, fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold)
@@ -887,7 +891,7 @@ fun BaselinesScreen(
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text("Deviation", color = OnSurfaceDim, fontSize = 11.sp)
-                                        val devColor = if (item.deviationPercent > 10) VitalRed
+                                        val devColor = if (item.deviationPercent > 10) AlertRed
                                         else if (item.deviationPercent < -10) RecoveryAccent
                                         else OnBackground
                                         Text("${item.deviation} ${item.trend}", color = devColor,
@@ -973,7 +977,7 @@ fun DataSourcesScreen(
                                         fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                                 }
 
-                                val statusColor = if (source.isConnected) ActivityAccent else VitalRed
+                                val statusColor = if (source.isConnected) ActivityAccent else AlertRed
                                 Text(
                                     if (source.isConnected) "Connected" else "Disconnected",
                                     color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Bold
@@ -998,7 +1002,7 @@ fun DataSourcesScreen(
                                 val hasCross = dataType.endsWith("✗")
                                 val color = when {
                                     hasCheck -> ActivityAccent
-                                    hasCross -> VitalRed
+                                    hasCross -> AlertRed
                                     else -> OnSurfaceDim
                                 }
                                 Text("  • $dataType", color = color, fontSize = 12.sp)
@@ -1055,7 +1059,7 @@ private fun exerciseIconForType(type: String): ImageVector = when {
     type.contains("BIKE", ignoreCase = true) ||
     type.contains("CYCL", ignoreCase = true) -> Icons.AutoMirrored.Filled.DirectionsBike
     type.contains("SWIM", ignoreCase = true) -> Icons.Filled.Pool
-    type.contains("WALK", ignoreCase = true) -> Icons.Filled.DirectionsWalk
+    type.contains("WALK", ignoreCase = true) -> Icons.AutoMirrored.Filled.DirectionsWalk
     type.contains("YOGA", ignoreCase = true) ||
     type.contains("MEDITAT", ignoreCase = true) -> Icons.Filled.SelfImprovement
     type.contains("STRENGTH", ignoreCase = true) ||

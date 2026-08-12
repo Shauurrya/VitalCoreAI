@@ -16,6 +16,7 @@ hilt = "2.59.2"
 hiltNavigationCompose = "1.2.0"
 room = "2.7.1"
 healthConnect = "1.1.0-rc01"
+biometric = "1.1.0"
 vico = "2.1.2"
 workManager = "2.10.1"
 ksp = "2.3.10"
@@ -58,6 +59,9 @@ room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+
+# Biometric (T-17)
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
 
 # Health Connect
 health-connect = { module = "androidx.health.connect:connect-client", version.ref = "healthConnect" }

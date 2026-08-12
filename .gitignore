@@ -15,3 +15,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Release signing - never commit. A keystore in a public repo is a keystore anyone can
+# sign an update with, and Play Store app identity is bound to it permanently.
+keystore.properties
+*.jks
+*.keystore

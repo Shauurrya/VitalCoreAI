@@ -48,7 +48,32 @@ object DataQualityEngine {
         val duplicateRecordsDetected: Boolean = false,
         /** Activity signals — an activity score must be judged on these, not on sleep. */
         val hasStepsToday: Boolean = false,
-        val activityHistoryDays: Int = 0
+        val activityHistoryDays: Int = 0,
+
+        // ── Priority 2: the two dimensions the spec requires that were missing ────
+        /**
+         * Age of the newest record backing this score, in hours.
+         *
+         * Completeness and freshness are genuinely different failures. A day can be
+         * *complete* — sleep, HR, steps all present — and still be scored from data that
+         * stopped arriving 30 hours ago because the watch has not synced. That score is
+         * stale, not incomplete, and the user deserves to be told which.
+         *
+         * Null means unknown, which is scored as neutral rather than as a failure.
+         */
+        val dataAgeHours: Double? = null,
+
+        /**
+         * Measurement consistency, 0..1, where 1 is a rock-steady sensor signal.
+         *
+         * Computed upstream from the dispersion of the metric's own recent history
+         * (see [consistencyFromSeries]). A signal thrashing between implausible values
+         * carries less information than a stable one even when every field is populated,
+         * and nothing previously captured that.
+         *
+         * Null means unknown → scored neutral.
+         */
+        val measurementConsistency: Double? = null
     )
 
     enum class DataSourceType { WATCH_SENSOR, PHONE_SENSOR, MANUAL, UNKNOWN }
@@ -87,6 +112,25 @@ object DataQualityEngine {
     private const val MAX_OVERNIGHT_GAP_HOURS = 2.0   // > 2h gap suggests watch removed
     private const val MIN_DAY_FRACTION = 0.7           // < 70% of day → partial day
 
+    /**
+     * Data older than this is stale enough to mention. Set above 24h because Samsung
+     * Health routinely delivers last night's sleep well into the following morning —
+     * flagging that as stale would fire on almost every ordinary day.
+     */
+    private const val FRESH_HOURS = 12.0
+    private const val STALE_HOURS = 36.0
+
+    /** Weights for the two dimensions added in Priority 2. Deliberately small: they
+     *  modulate a confidence number, they do not dominate it. */
+    private const val W_FRESHNESS = 0.08
+    private const val W_CONSISTENCY = 0.07
+
+    /** The six dimensions the product spec names. Exposed for the debug screen. */
+    enum class Factor {
+        COMPLETENESS, FRESHNESS, SOURCE_RELIABILITY,
+        SAMPLE_SIZE, MEASUREMENT_CONSISTENCY, HISTORICAL_COVERAGE
+    }
+
     // ── Public API ───────────────────────────────────────────────────────────
 
     /**
@@ -116,15 +160,16 @@ object DataQualityEngine {
             }
             checks += when {
                 input.activityHistoryDays >= MIN_DAYS_FOR_HIGH ->
-                    CheckResult(1.0, 0.35, "${input.activityHistoryDays} days activity history")
+                    CheckResult(1.0, 0.35, "${input.activityHistoryDays} days activity history", Factor.HISTORICAL_COVERAGE)
                 input.activityHistoryDays >= MIN_DAYS_FOR_MEDIUM ->
-                    CheckResult(0.6, 0.35, "${input.activityHistoryDays} days activity history (building baseline)")
+                    CheckResult(0.6, 0.35, "${input.activityHistoryDays} days activity history (building baseline)", Factor.HISTORICAL_COVERAGE)
                 input.activityHistoryDays >= 1 ->
-                    CheckResult(0.3, 0.35, "only ${input.activityHistoryDays} day(s) activity history")
-                else -> CheckResult(0.0, 0.35, "no activity history")
+                    CheckResult(0.3, 0.35, "only ${input.activityHistoryDays} day(s) activity history", Factor.SAMPLE_SIZE)
+                else -> CheckResult(0.0, 0.35, "no activity history", Factor.SAMPLE_SIZE)
             }
             checks += sourceCheck(input, weight = 0.10)
             checks += partialDayCheck(input, weight = 0.10)
+            checks += commonChecks(input)
             return aggregate(checks, insufficient = !input.hasStepsToday && input.activityHistoryDays < MIN_DAYS_FOR_MEDIUM)
         }
 
@@ -139,27 +184,28 @@ object DataQualityEngine {
             checks += partialDayCheck(input, weight = 0.30)
             checks += sourceCheck(input, weight = 0.15)
             checks += when {
-                input.hrHistoryDays >= MIN_DAYS_FOR_HIGH -> CheckResult(1.0, 0.15, "${input.hrHistoryDays} days HR history")
-                input.hrHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.15, "${input.hrHistoryDays} days HR history")
-                else -> CheckResult(0.2, 0.15, "limited HR history for a resting baseline")
+                input.hrHistoryDays >= MIN_DAYS_FOR_HIGH -> CheckResult(1.0, 0.15, "${input.hrHistoryDays} days HR history", Factor.HISTORICAL_COVERAGE)
+                input.hrHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.15, "${input.hrHistoryDays} days HR history", Factor.HISTORICAL_COVERAGE)
+                else -> CheckResult(0.2, 0.15, "limited HR history for a resting baseline", Factor.SAMPLE_SIZE)
             }
+            checks += commonChecks(input)
             return aggregate(checks, insufficient = input.hrPointsPerHour <= 0.0 && !input.hasStepsToday)
         }
 
         // 1. Sleep history depth (weight 0.25)
         if (usesSleep) checks += when {
-            input.sleepHistoryDays >= MIN_DAYS_FOR_HIGH  -> CheckResult(1.0, 0.25, "${input.sleepHistoryDays} days sleep history")
-            input.sleepHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.25, "${input.sleepHistoryDays} days sleep history (building baseline)")
-            input.sleepHistoryDays >= 1                  -> CheckResult(0.3, 0.25, "only ${input.sleepHistoryDays} day(s) sleep history")
-            else                                          -> CheckResult(0.0, 0.25, "no sleep history")
+            input.sleepHistoryDays >= MIN_DAYS_FOR_HIGH  -> CheckResult(1.0, 0.25, "${input.sleepHistoryDays} days sleep history", Factor.HISTORICAL_COVERAGE)
+            input.sleepHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.25, "${input.sleepHistoryDays} days sleep history (building baseline)", Factor.HISTORICAL_COVERAGE)
+            input.sleepHistoryDays >= 1                  -> CheckResult(0.3, 0.25, "only ${input.sleepHistoryDays} day(s) sleep history", Factor.SAMPLE_SIZE)
+            else                                          -> CheckResult(0.0, 0.25, "no sleep history", Factor.SAMPLE_SIZE)
         }
 
         // 2. HR history depth (weight 0.20)
         if (usesRestingHR) checks += when {
-            input.hrHistoryDays >= MIN_DAYS_FOR_HIGH  -> CheckResult(1.0, 0.20, "${input.hrHistoryDays} days HR history")
-            input.hrHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.20, "${input.hrHistoryDays} days HR history")
-            input.hrHistoryDays >= 1                  -> CheckResult(0.3, 0.20, "only ${input.hrHistoryDays} day(s) HR history")
-            else                                       -> CheckResult(0.0, 0.20, "no HR history")
+            input.hrHistoryDays >= MIN_DAYS_FOR_HIGH  -> CheckResult(1.0, 0.20, "${input.hrHistoryDays} days HR history", Factor.HISTORICAL_COVERAGE)
+            input.hrHistoryDays >= MIN_DAYS_FOR_MEDIUM -> CheckResult(0.6, 0.20, "${input.hrHistoryDays} days HR history", Factor.HISTORICAL_COVERAGE)
+            input.hrHistoryDays >= 1                  -> CheckResult(0.3, 0.20, "only ${input.hrHistoryDays} day(s) HR history", Factor.SAMPLE_SIZE)
+            else                                       -> CheckResult(0.0, 0.20, "no HR history", Factor.SAMPLE_SIZE)
         }
 
         // 3. Today's sleep present (weight 0.20)
@@ -189,6 +235,9 @@ object DataQualityEngine {
         // 7. Partial day check (weight 0.05)
         checks += partialDayCheck(input, weight = 0.05)
 
+        // 8/9. Freshness and measurement consistency (Priority 2)
+        checks += commonChecks(input)
+
         // Insufficient: missing both today's sleep AND HR with < 3 days history
         val insufficientData = !input.hasSleepToday &&
                 !input.hasHRToday &&
@@ -201,20 +250,104 @@ object DataQualityEngine {
 
     private fun sourceCheck(input: QualityInput, weight: Double): CheckResult = when {
         input.overnightHRGapHours > MAX_OVERNIGHT_GAP_HOURS ->
-            CheckResult(0.2, weight, "possible overnight watch removal (${input.overnightHRGapHours.toInt()}h gap)")
+            CheckResult(
+                0.2, weight,
+                "possible overnight watch removal (${input.overnightHRGapHours.toInt()}h gap)",
+                Factor.SOURCE_RELIABILITY
+            )
         input.dataSourceType == DataSourceType.PHONE_SENSOR ->
-            CheckResult(0.5, weight, "phone-only tracking")
+            CheckResult(0.5, weight, "phone-only tracking", Factor.SOURCE_RELIABILITY)
         input.dataSourceType == DataSourceType.MANUAL ->
-            CheckResult(0.4, weight, "manual entry")
-        else -> CheckResult(1.0, weight, "watch sensor data")
+            CheckResult(0.4, weight, "manual entry", Factor.SOURCE_RELIABILITY)
+        else -> CheckResult(1.0, weight, "watch sensor data", Factor.SOURCE_RELIABILITY)
     }
 
     private fun partialDayCheck(input: QualityInput, weight: Double): CheckResult =
         if (input.partialDayFraction >= MIN_DAY_FRACTION) {
-            CheckResult(1.0, weight, "full day recorded")
+            CheckResult(1.0, weight, "full day recorded", Factor.COMPLETENESS)
         } else {
-            CheckResult(input.partialDayFraction, weight, "partial day (${(input.partialDayFraction * 100).toInt()}% coverage)")
+            CheckResult(
+                input.partialDayFraction, weight,
+                "partial day (${(input.partialDayFraction * 100).toInt()}% coverage)",
+                Factor.COMPLETENESS
+            )
         }
+
+    /**
+     * Checks that apply to every metric profile: how recently the data arrived, and how
+     * steady the underlying signal is. Appended to whichever profile-specific checks ran,
+     * and renormalised along with them by [aggregate].
+     */
+    private fun commonChecks(input: QualityInput): List<CheckResult> = buildList {
+        // A null input means "not measured", which is different from "measured and bad".
+        // Such a check is omitted entirely rather than scored at some partial value: the
+        // weights renormalise over whatever ran, so an unsupplied dimension neither drags
+        // the percentage down nor appears in the user-facing problem list. Scoring unknown
+        // as a soft failure would have printed "data age unknown" on every score in the
+        // app until every call site was updated — a caller's omission is not a data defect.
+        val age = input.dataAgeHours
+        if (age != null) {
+            add(
+                when {
+                    age <= FRESH_HOURS ->
+                        CheckResult(1.0, W_FRESHNESS, "data is current", Factor.FRESHNESS)
+                    age >= STALE_HOURS ->
+                        CheckResult(
+                            0.2, W_FRESHNESS,
+                            "last synced ${age.toInt()}h ago — scores may be out of date",
+                            Factor.FRESHNESS
+                        )
+                    else -> {
+                        // Linear decay between the two thresholds.
+                        val t = (age - FRESH_HOURS) / (STALE_HOURS - FRESH_HOURS)
+                        CheckResult(
+                            1.0 - 0.8 * t, W_FRESHNESS,
+                            "last synced ${age.toInt()}h ago",
+                            Factor.FRESHNESS
+                        )
+                    }
+                }
+            )
+        }
+
+        val c = input.measurementConsistency
+        if (c != null) {
+            add(
+                when {
+                    c >= 0.75 -> CheckResult(1.0, W_CONSISTENCY, "stable sensor readings", Factor.MEASUREMENT_CONSISTENCY)
+                    c >= 0.4 -> CheckResult(c, W_CONSISTENCY, "sensor readings vary more than usual", Factor.MEASUREMENT_CONSISTENCY)
+                    else -> CheckResult(c.coerceAtLeast(0.0), W_CONSISTENCY, "sensor readings are erratic", Factor.MEASUREMENT_CONSISTENCY)
+                }
+            )
+        }
+    }
+
+    /**
+     * Turn a metric's recent history into a 0..1 consistency score.
+     *
+     * Uses the robust coefficient of variation (MAD-based, so one bad reading does not
+     * define "typical variability"), mapped so that a CV at or below [goodCv] scores 1.0
+     * and one at or above [badCv] scores 0.0.
+     *
+     * Returns null for series too short to judge — never a fabricated 1.0, which would
+     * make a brand-new user look maximally reliable.
+     */
+    fun consistencyFromSeries(
+        values: List<Double>,
+        goodCv: Double = 0.08,
+        badCv: Double = 0.35
+    ): Double? {
+        if (values.size < 4) return null
+        val median = RobustStats.median(values) ?: return null
+        if (kotlin.math.abs(median) < 1e-9) return null
+        val sigma = RobustStats.robustSigma(values) ?: return null
+        val cv = sigma / kotlin.math.abs(median)
+        return when {
+            cv <= goodCv -> 1.0
+            cv >= badCv -> 0.0
+            else -> 1.0 - (cv - goodCv) / (badCv - goodCv)
+        }
+    }
 
     /** Weights are renormalised over whichever checks the profile actually selected. */
     private fun aggregate(checks: List<CheckResult>, insufficient: Boolean): DataQualityReport {
@@ -228,6 +361,19 @@ object DataQualityEngine {
         val problems = checks.filter { it.score < 1.0 }.sortedBy { it.score }.map { it.reason }
         val reasons = if (problems.isEmpty()) listOf("All expected data present") else problems.take(4)
 
+        // Positives make the "Why?" block symmetrical: a MEDIUM score should say what it
+        // *does* have ("sleep data available", "RHR available") alongside what it lacks.
+        val positives = checks.filter { it.score >= 1.0 }.map { it.reason }.take(4)
+
+        // Per-dimension roll-up, weight-averaged within each factor.
+        val factors = checks
+            .groupBy { it.factor }
+            .mapValues { (_, group) ->
+                val w = group.sumOf { it.weight }
+                if (w <= 0.0) 0f else (group.sumOf { it.score * it.weight } / w).toFloat()
+            }
+            .mapKeys { it.key.name }
+
         return DataQualityReport(
             level = when {
                 percentScore >= 75 -> Confidence.HIGH
@@ -236,7 +382,9 @@ object DataQualityEngine {
             },
             confidencePercent = percentScore,
             reasons = reasons,
-            insufficientData = insufficient
+            insufficientData = insufficient,
+            positives = positives,
+            factors = factors
         )
     }
 
@@ -249,5 +397,15 @@ object DataQualityEngine {
 
     // ── Internal ─────────────────────────────────────────────────────────────
 
-    private data class CheckResult(val score: Double, val weight: Double, val reason: String)
+    /**
+     * @param factor which of the six spec dimensions this check reports on. Defaults to
+     *               COMPLETENESS because most checks are presence checks; anything that is
+     *               really about history depth, source, freshness or stability tags itself.
+     */
+    private data class CheckResult(
+        val score: Double,
+        val weight: Double,
+        val reason: String,
+        val factor: Factor = Factor.COMPLETENESS
+    )
 }

@@ -250,7 +250,7 @@ object SleepDebtCalculator {
         }
 
         val debtText = when {
-            debt <= 15 -> "You have essentially no sleep debt."
+            debt <= 15 -> "Essentially no sleep debt."
             debt < 60 -> "You're carrying about ${debt}m of sleep debt — a minor shortfall."
             debt < 180 -> "You're carrying ${debt / 60}h ${debt % 60}m of sleep debt."
             else -> "You're carrying ${debt / 60}h ${debt % 60}m of sleep debt, a substantial shortfall."

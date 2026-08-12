@@ -16,6 +16,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
+import com.example.vitalcoreai.core.time.VitalTime
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Workout History ViewModel (Part 17 — screen 6)
@@ -103,9 +104,13 @@ class WorkoutDetailViewModel @Inject constructor(
                     .map { ((it.timestampMs - session.endMs) / 1000).toInt() to it.bpm }
                     .filter { it.first in 0..180 }
 
-                val hrrResult = if (session.maxHR != null && postWorkoutHR.isNotEmpty()) {
+                // Bound to a local so the smart cast holds and the !! goes away — an
+                // assertion on a value the branch condition already proved non-null reads as
+                // a risk where there is none.
+                val peakHR = session.maxHR
+                val hrrResult = if (peakHR != null && postWorkoutHR.isNotEmpty()) {
                     val historical = computedScoresDao.getLatestN(30).mapNotNull { it.hrr1 }
-                    HRRecoveryCalculator.calculate(session.maxHR!!, postWorkoutHR, historical)
+                    HRRecoveryCalculator.calculate(peakHR, postWorkoutHR, historical)
                 } else null
 
                 _state.value = WorkoutDetailState(
@@ -235,7 +240,8 @@ class BaselinesViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val past30 = dailyMetricsDao.getLatest(30)
-            val today = LocalDate.now().toEpochDay()
+            // The `today` local that used to sit here was dead: every baseline below reads
+            // getLatest(30) with no date filter, so nothing referenced it.
             val scores = computedScoresDao.getLatestN(30)
             val items = mutableListOf<BaselineItem>()
 
@@ -404,7 +410,7 @@ class DataSourcesViewModel @Inject constructor(
                     isConnected = syncStates.isNotEmpty(),
                     lastSyncTime = syncStates.maxByOrNull { it.lastSuccessfulSyncMs }?.let {
                         Instant.ofEpochMilli(it.lastSuccessfulSyncMs)
-                            .atZone(ZoneId.systemDefault())
+                            .atZone(VitalTime.zone())
                             .format(formatter)
                     },
                     dataTypes = listOf(

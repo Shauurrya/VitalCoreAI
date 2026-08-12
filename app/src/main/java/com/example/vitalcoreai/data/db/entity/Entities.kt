@@ -65,7 +65,15 @@ data class DailyMetricsEntity(
      * drives achievement milestones. Rows are now only written when this is true, and the
      * flag is kept so an honest count survives any legacy row.
      */
-    val hasData: Boolean = true
+    val hasData: Boolean = true,
+    /**
+     * Timestamp of the newest Health Connect record backing this day.
+     *
+     * Feeds `DataQualityEngine.QualityInput.dataAgeHours`. Completeness and freshness are
+     * different failures: a day can be fully populated and still be scored from data that
+     * stopped arriving 30 hours ago because the watch has not synced.
+     */
+    val newestRecordTimestampMs: Long? = null
 )
 
 @Entity(tableName = "computed_scores")
@@ -136,6 +144,48 @@ data class ComputedScoresEntity(
     /** False → the UI must render "Needs 14 days", never an ACWR zone label. */
     val acwrIsMeaningful: Boolean? = null,
     val acwrDaysOfHistory: Int? = null,
+
+    // ─── v7 — persisted outputs of the V1.1 intelligence engines ──────────────
+    // Persisted rather than recomputed per screen open: the forecast and trend engines
+    // each read ~30 days of history, and a stored value is one the debug screen can
+    // inspect after the fact when a user reports something odd.
+    //
+    // Every column here is nullable because SQLite's ALTER TABLE ADD COLUMN requires it —
+    // see Migrations.MIGRATION_6_7. Null means "not computed", never zero.
+
+    /** Tomorrow's projected readiness range. Render as "low–high", never a midpoint. */
+    val forecastLow: Int? = null,
+    val forecastHigh: Int? = null,
+    val forecastConfidence: String? = null,
+    /** Pipe-delimited "name:points:description" driver list. */
+    val forecastDrivers: String? = null,
+    val forecastRisks: String? = null,
+
+    /** Sleep regularity, distinct from sleep duration or quality. */
+    val sleepConsistencyScore: Float? = null,
+    val sleepConsistencyLabel: String? = null,
+    val bedtimeSdMinutes: Int? = null,
+    val wakeSdMinutes: Int? = null,
+
+    /** RobustStats.Trend.name per window. */
+    val trend7Direction: String? = null,
+    val trend14Direction: String? = null,
+    val trend30Direction: String? = null,
+    /** Pipe-delimited contributor descriptions for the 14-day window. */
+    val trendContributors: String? = null,
+
+    /** Pipe-delimited "metric:severity:title" — full text is regenerated on demand. */
+    val anomaliesEncoded: String? = null,
+    val anomalyCount: Int? = null,
+
+    val recommendationType: String? = null,
+    val recommendationIntensity: String? = null,
+    val recommendationVolumePct: Int? = null,
+    val recommendationDetail: String? = null,
+
+    /** Pipe-delimited "FACTOR=0.85" for the six data-quality dimensions. */
+    val dataQualityFactors: String? = null,
+    val dataQualityPositives: String? = null,
 
     val createdAtMs: Long = System.currentTimeMillis()
 )

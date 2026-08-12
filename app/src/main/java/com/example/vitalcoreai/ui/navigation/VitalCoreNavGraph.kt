@@ -34,6 +34,8 @@ object Routes {
     const val HRR              = "hrr"                // Part 7  / Part 17 #11
     const val BASELINES        = "baselines"          // Part 5  / Part 17 #16
     const val DATA_SOURCES     = "data_sources"       // Part 21 / Part 17 #19
+    const val FORECAST         = "forecast"           // T-13 — tomorrow's readiness range
+    const val DEBUG            = "debug"              // T-14 — developer screen
 
     /** Workout Detail is the only route that carries an argument. */
     const val WORKOUT_DETAIL_ARG = "sessionStartMs"
@@ -167,6 +169,18 @@ fun VitalCoreNavGraph(
 
         composable(Routes.DATA_SOURCES) {
             DataSourcesScreen(onBack = { navController.popBackStack() })
+        }
+
+        // T-13 — the forecast in full: range, every driver, risks and opportunities.
+        composable(Routes.FORECAST) {
+            ForecastScreen(onBack = { navController.popBackStack() })
+        }
+
+        // T-14 — developer screen. The route is always registered so a deep link cannot
+        // 404 in a debug build; the SCREEN itself refuses to load synthetic data outside
+        // one, and the only way to reach it is a gesture guarded by BuildConfig.DEBUG.
+        composable(Routes.DEBUG) {
+            DebugScreen(onBack = { navController.popBackStack() })
         }
     }
 }

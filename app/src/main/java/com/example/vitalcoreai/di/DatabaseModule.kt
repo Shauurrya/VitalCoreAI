@@ -2,6 +2,7 @@ package com.example.vitalcoreai.di
 
 import android.content.Context
 import androidx.room.Room
+import com.example.vitalcoreai.data.db.Migrations
 import com.example.vitalcoreai.data.db.VitalCoreDatabase
 import com.example.vitalcoreai.data.db.dao.*
 import dagger.Module
@@ -15,11 +16,25 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
 
+    /**
+     * Real migrations from v6 onward; destructive fallback only for v1–v5.
+     *
+     * The previous blanket `fallbackToDestructiveMigration(true)` would have silently
+     * deleted `check_ins`, `journal_entries`, `workout_exercises` and `muscle_recovery` on
+     * the next schema bump. Those four tables are user-authored and exist nowhere else —
+     * unlike the Health Connect mirror tables, nothing can rebuild them.
+     *
+     * See [Migrations] for the policy and for how to add the next one.
+     */
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): VitalCoreDatabase =
         Room.databaseBuilder(context, VitalCoreDatabase::class.java, "vitalcore_db")
-            .fallbackToDestructiveMigration(true)
+            .addMigrations(*Migrations.ALL)
+            .fallbackToDestructiveMigrationFrom(
+                true,
+                *Migrations.DESTRUCTIVE_FALLBACK_FROM
+            )
             .build()
 
     @Provides fun provideDailyMetricsDao(db: VitalCoreDatabase): DailyMetricsDao = db.dailyMetricsDao()

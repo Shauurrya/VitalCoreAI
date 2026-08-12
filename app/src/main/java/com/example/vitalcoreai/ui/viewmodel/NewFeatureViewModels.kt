@@ -10,8 +10,10 @@ import com.example.vitalcoreai.data.repository.HealthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.time.LocalDate
 import javax.inject.Inject
+import com.example.vitalcoreai.core.time.VitalTime
+import com.example.vitalcoreai.core.time.dayFlow
+import com.example.vitalcoreai.core.time.perDay
 
 // ─── Check-In ViewModel (Part 12) ─────────────────────────────────────────────
 
@@ -37,13 +39,29 @@ class CheckInViewModel @Inject constructor(
     private val _state = MutableStateFlow(CheckInUiState())
     val state: StateFlow<CheckInUiState> = _state.asStateFlow()
 
-    init { loadExisting() }
+    /**
+     * The day this screen is reading and writing.
+     *
+     * Load and save used to resolve "today" independently, so a user who opened the screen
+     * at 23:59 and saved at 00:01 read yesterday's row and wrote today's primary key —
+     * silently discarding what they had just been shown. One resolved day, re-read when it
+     * actually rolls over, removes the split.
+     */
+    private var currentDay: Long = VitalTime.todayEpochDay()
 
-    private fun loadExisting() = viewModelScope.launch {
-        val today = LocalDate.now().toEpochDay()
-        val existing = repository.getCheckInForDay(today)
-        if (existing != null) {
-            _state.value = CheckInUiState(
+    init { observeToday() }
+
+    private fun observeToday() = viewModelScope.launch {
+        dayFlow().collect { today ->
+            currentDay = today
+            loadExisting(today)
+        }
+    }
+
+    private suspend fun loadExisting(day: Long) {
+        val existing = repository.getCheckInForDay(day)
+        _state.value = if (existing != null) {
+            CheckInUiState(
                 energy = existing.energy,
                 stress = existing.stress,
                 soreness = existing.soreness,
@@ -54,6 +72,10 @@ class CheckInViewModel @Inject constructor(
                 notes = existing.notes ?: "",
                 alreadyCheckedIn = true
             )
+        } else {
+            // A new day starts a blank check-in rather than leaving yesterday's answers on
+            // screen with alreadyCheckedIn still true.
+            CheckInUiState()
         }
     }
 
@@ -72,7 +94,7 @@ class CheckInViewModel @Inject constructor(
         viewModelScope.launch {
             repository.saveCheckIn(
                 CheckInEntity(
-                    dateEpochDay = LocalDate.now().toEpochDay(),
+                    dateEpochDay = currentDay,
                     energy = s.energy,
                     stress = s.stress,
                     soreness = s.soreness,
@@ -111,11 +133,15 @@ class JournalViewModel @Inject constructor(
 
     init { load() }
 
+    /** See the note on CheckInViewModel.currentDay — the same load/save split applied here. */
+    private var currentDay: Long = VitalTime.todayEpochDay()
+
     private fun load() = viewModelScope.launch {
-        val today = LocalDate.now().toEpochDay()
-        val todayEntries = repository.getJournalForDay(today)
-        _state.update { it.copy(todayEntries = todayEntries, isLoading = false) }
-        computeCorrelations()
+        dayFlow().collect { today ->
+            currentDay = today
+            _state.update { it.copy(todayEntries = repository.getJournalForDay(today), isLoading = false) }
+            computeCorrelations(today)
+        }
     }
 
     fun selectHabit(habitId: String) {
@@ -131,7 +157,7 @@ class JournalViewModel @Inject constructor(
             val habit = HabitCorrelationEngine.getHabitDefinition(s.selectedHabitId)
             repository.logJournalEntry(
                 JournalEntryEntity(
-                    dateEpochDay = LocalDate.now().toEpochDay(),
+                    dateEpochDay = currentDay,
                     habitId = s.selectedHabitId,
                     value = s.entryValue,
                     unit = habit?.unit ?: "",
@@ -139,22 +165,22 @@ class JournalViewModel @Inject constructor(
                 )
             )
             // Refresh
-            val todayEntries = repository.getJournalForDay(LocalDate.now().toEpochDay())
+            val todayEntries = repository.getJournalForDay(currentDay)
             _state.update { it.copy(isSaving = false, todayEntries = todayEntries, entryValue = 1f, entryNotes = "") }
         }
     }
 
     fun deleteEntry(id: Long) = viewModelScope.launch {
         repository.deleteJournalEntry(id)
-        val todayEntries = repository.getJournalForDay(LocalDate.now().toEpochDay())
+        val todayEntries = repository.getJournalForDay(currentDay)
         _state.update { it.copy(todayEntries = todayEntries) }
     }
 
-    private suspend fun computeCorrelations() {
+    private suspend fun computeCorrelations(today: Long) {
         val habitIds = repository.getAllTrackedHabitIds()
         if (habitIds.isEmpty()) return
 
-        val startDay = LocalDate.now().minusDays(90).toEpochDay()
+        val startDay = today - 90
 
         // Build per-habit daily value maps
         val habitsData = mutableMapOf<String, Map<Long, Float>>()
@@ -197,10 +223,11 @@ class MuscleRecoveryViewModel @Inject constructor(
     init { load() }
 
     private fun load() = viewModelScope.launch {
-        val today = LocalDate.now().toEpochDay()
-        val startDay = today - 14
-        // Use exercise sessions from the last 14 days
-        repository.exerciseFrom(startDay).collect { sessions ->
+        // "today" used to be captured once, before a collector that never completes, and was
+        // then fed into the recovery decay for the whole life of that collector — so a screen
+        // left open reported hours-since-trained against a day that had already passed.
+        perDay { today -> repository.exerciseFrom(today - 14).map { today to it } }
+            .collect { (today, sessions) ->
             val checkIn = repository.getCheckInForDay(today)
             val sessionInfos = sessions.map { session ->
                 val groups = if (session.muscleGroups != null) {
@@ -248,7 +275,7 @@ class EnergyBankViewModel @Inject constructor(
     init { load() }
 
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
             _state.value = EnergyBankUiState(
                 score = latest?.energyBankScore,

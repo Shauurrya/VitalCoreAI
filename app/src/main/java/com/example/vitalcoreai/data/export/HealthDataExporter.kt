@@ -18,6 +18,7 @@ import java.io.PrintWriter
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.example.vitalcoreai.core.time.VitalTime
 
 /**
  * B9 — CSV Export Engine
@@ -64,8 +65,8 @@ class HealthDataExporter @Inject constructor(
      */
     suspend fun exportDailyMetrics(
         context: Context,
-        since: LocalDate = LocalDate.now().minusDays(90),
-        until: LocalDate = LocalDate.now()
+        since: LocalDate = VitalTime.today().minusDays(90),
+        until: LocalDate = VitalTime.today()
     ): Uri = withContext(Dispatchers.IO) {
         val rows = dailyMetricsDao.getRange(since.toEpochDay(), until.toEpochDay())
         val file = writeFile(context, "vitalcore_daily_metrics_${dateSuffix()}.csv") { pw ->
@@ -96,8 +97,8 @@ class HealthDataExporter @Inject constructor(
      */
     suspend fun exportComputedScores(
         context: Context,
-        since: LocalDate = LocalDate.now().minusDays(90),
-        until: LocalDate = LocalDate.now()
+        since: LocalDate = VitalTime.today().minusDays(90),
+        until: LocalDate = VitalTime.today()
     ): Uri = withContext(Dispatchers.IO) {
         val rows = computedScoresDao.getRange(since.toEpochDay(), until.toEpochDay())
         val file = writeFile(context, "vitalcore_scores_${dateSuffix()}.csv") { pw ->
@@ -120,8 +121,8 @@ class HealthDataExporter @Inject constructor(
 
     suspend fun exportExerciseSessions(
         context: Context,
-        since: LocalDate = LocalDate.now().minusDays(90),
-        until: LocalDate = LocalDate.now()
+        since: LocalDate = VitalTime.today().minusDays(90),
+        until: LocalDate = VitalTime.today()
     ): Uri = withContext(Dispatchers.IO) {
         val rows = exerciseSessionDao.getRange(since.toEpochDay(), until.toEpochDay())
         val file = writeFile(context, "vitalcore_exercise_${dateSuffix()}.csv") { pw ->
@@ -143,8 +144,8 @@ class HealthDataExporter @Inject constructor(
      */
     suspend fun exportAll(
         context: Context,
-        since: LocalDate = LocalDate.now().minusDays(90),
-        until: LocalDate = LocalDate.now()
+        since: LocalDate = VitalTime.today().minusDays(90),
+        until: LocalDate = VitalTime.today()
     ): List<Uri> = listOf(
         exportDailyMetrics(context, since, until),
         exportComputedScores(context, since, until),
@@ -183,7 +184,7 @@ class HealthDataExporter @Inject constructor(
     private fun fileUri(context: Context, file: File): Uri =
         FileProvider.getUriForFile(context, FILE_AUTHORITY, file)
 
-    private fun dateSuffix(): String = LocalDate.now().toString().replace("-", "")
+    private fun dateSuffix(): String = VitalTime.today().toString().replace("-", "")
 
     private fun Long.toIsoDate(): String = LocalDate.ofEpochDay(this).toString()
 

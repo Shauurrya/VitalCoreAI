@@ -11,6 +11,7 @@ import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
+import com.example.vitalcoreai.core.time.VitalTime
 
 /**
  * B4/B6 — Primary Health Connect sync + score computation worker.
@@ -85,7 +86,7 @@ class SyncWorker @AssistedInject constructor(
         // Coach alerts — only the WARNING-severity insight, if any, to avoid over-notifying
         // on every sync (moderate/positive insights stay in-app, on the Insights screen).
         if (prefs.getBoolean("notify_coach_alerts", true) && scores != null) {
-            val recentMetrics = repository.metricsFrom(LocalDate.now().minusDays(14).toEpochDay()).first()
+            val recentMetrics = repository.metricsFrom(VitalTime.todayEpochDay() - 14).first()
             val todayMetrics = recentMetrics.lastOrNull()
             val rhrValues = recentMetrics.mapNotNull { it.restingHR?.toDouble() }
             val hrBaseline = if (rhrValues.size >= 3) rhrValues.average().toInt() else null

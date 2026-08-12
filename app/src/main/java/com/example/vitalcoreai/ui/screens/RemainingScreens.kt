@@ -23,6 +23,12 @@ import com.example.vitalcoreai.coach.CoachEngine
 import com.example.vitalcoreai.theme.*
 import com.example.vitalcoreai.ui.components.*
 import com.example.vitalcoreai.ui.viewmodel.*
+import androidx.compose.ui.res.stringResource
+import com.example.vitalcoreai.R
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 
 private val PremiumCardShape = RoundedCornerShape(20.dp)
 
@@ -71,7 +77,15 @@ fun ActivityScreen(
             }
             item {
                 state.activityScore?.let {
-                    ScoreCard("Activity Score", it, subtitle = "vs your 30-day avg")
+                    MetricTile(
+                        data = MetricTileData(
+                            label = "Activity Score",
+                            value = it.toInt().toString(),
+                            unit = "/100",
+                            domain = Domain.ACTIVITY,
+                            delta = "vs your 30-day avg"
+                        )
+                    )
                 }
             }
             if (state.chartValues.isNotEmpty()) {
@@ -80,7 +94,7 @@ fun ActivityScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("14-Day Steps History", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = VitalGreen)
+                            TrendLineChart(values = state.chartValues, accent = ActivityAccent)
                         }
                     }
                 }
@@ -140,10 +154,10 @@ fun TrainingLoadScreen(
             state.acwrZone?.let { zone ->
                 item {
                     val (zoneLabel, zoneColor) = when (zone) {
-                        "OPTIMAL"        -> "Optimal Zone 🎯" to VitalGreen
-                        "UNDER_TRAINING" -> "Under-training" to VitalAmber
-                        "CAUTION"        -> "Caution ⚠️" to VitalOrange
-                        "DANGER"         -> "Danger Zone 🚨" to VitalRed
+                        "OPTIMAL"        -> "Optimal Zone 🎯" to ActivityAccent
+                        "UNDER_TRAINING" -> "Under-training" to StressAccent
+                        "CAUTION"        -> "Caution ⚠️" to StrainAccent
+                        "DANGER"         -> "Danger Zone 🚨" to AlertRed
                         else             -> zone to OnSurfaceDim
                     }
                     Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
@@ -162,7 +176,7 @@ fun TrainingLoadScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("14-Day Training Load", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(8.dp))
-                            VicoPrimaryChart(values = state.chartValues, color = VitalOrange)
+                            TrendLineChart(values = state.chartValues, accent = StrainAccent)
                         }
                     }
                 }
@@ -198,7 +212,7 @@ fun BiologicalAgeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Biological Age", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
+                title = { Text("Fitness Age (estimate)", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = RecoveryAccent) } },
                 actions = {
                     IconButton(onClick = { showInfoSheet = true }) {
@@ -218,16 +232,16 @@ fun BiologicalAgeScreen(
             // ─── Permanent disclaimer ─────────────────────────────────────
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = VitalAmber.copy(alpha = 0.1f)),
+                    colors = CardDefaults.cardColors(containerColor = StressAccent.copy(alpha = 0.1f)),
                     shape = MaterialTheme.shapes.large
                 ) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Filled.Info, null, tint = VitalAmber, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Filled.Info, null, tint = StressAccent, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
                             state.disclaimer,
                             style = MaterialTheme.typography.bodySmall,
-                            color = VitalAmber
+                            color = StressAccent
                         )
                     }
                 }
@@ -243,7 +257,7 @@ fun BiologicalAgeScreen(
                         Text(
                             "${state.biologicalAge}",
                             style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
-                            color = if (state.ageDiff <= 0) VitalGreen else VitalAmber
+                            color = if (state.ageDiff <= 0) ActivityAccent else StressAccent
                         )
                         Spacer(Modifier.height(4.dp))
                         val diffText = when {
@@ -267,8 +281,8 @@ fun BiologicalAgeScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text("VO₂ Max Estimate", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
                             Spacer(Modifier.height(4.dp))
-                            Text("${vo2.toInt()} mL/kg/min (±10%)", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = VitalBlue)
-                            Text("ESTIMATE — not a clinical measurement", style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
+                            Text("${vo2.toInt()} mL/kg/min (±10%)", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = RecoveryAccent)
+                            Text("Estimated from resting heart rate — not a measurement", style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
                         }
                     }
                 }
@@ -365,13 +379,13 @@ fun InsightsScreen(
                             Spacer(Modifier.width(12.dp))
                             Surface(
                                 shape = MaterialTheme.shapes.small,
-                                color = VitalGreen.copy(alpha = 0.15f)
+                                color = ActivityAccent.copy(alpha = 0.15f)
                             ) {
                                 Text(
                                     "+${suggestion.projectedDelta} pts",
                                     Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = VitalGreen
+                                    color = ActivityAccent
                                 )
                             }
                         }
@@ -487,13 +501,13 @@ fun HistoryScreen(
                                     style = MaterialTheme.typography.labelMedium, color = OnSurfaceDim
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    score.recoveryScore?.let { Text("R: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = VitalBlue) }
-                                    score.readinessScore?.let { Text("Rd: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = VitalGreen) }
-                                    score.sleepScore?.let { Text("S: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = VitalPurple) }
+                                    score.recoveryScore?.let { Text("R: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = RecoveryAccent) }
+                                    score.readinessScore?.let { Text("Rd: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = ActivityAccent) }
+                                    score.sleepScore?.let { Text("S: ${it.toInt()}", style = MaterialTheme.typography.bodySmall, color = SleepAccent) }
                                 }
                             }
                             score.activityScore?.let {
-                                CompactScoreRing(score = it, size = 40.dp)
+                                CompactRing(value = it, size = 40.dp)
                             }
                         }
                     }
@@ -564,7 +578,7 @@ fun WeeklyReportScreen(
                             Spacer(Modifier.height(12.dp))
                             report!!.weeklyHealthScore?.let { score ->
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    AnimatedScoreRing(score, "WEEK", size = 100.dp)
+                                    PercentRing(score, "WEEK", size = 100.dp)
                                     Spacer(Modifier.width(16.dp))
                                     Column {
                                         Text("Health Score", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
@@ -573,7 +587,7 @@ fun WeeklyReportScreen(
                                             Text(
                                                 "$sign${delta.toInt()} from last week",
                                                 style = MaterialTheme.typography.bodySmall,
-                                                color = if (delta >= 0) VitalGreen else VitalRed
+                                                color = if (delta >= 0) ActivityAccent else AlertRed
                                             )
                                         }
                                     }
@@ -610,7 +624,7 @@ fun WeeklyReportScreen(
                                 Modifier.fillMaxWidth().padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("•", color = VitalBlue, fontWeight = FontWeight.Bold)
+                                Text("•", color = RecoveryAccent, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.width(8.dp))
                                 Text(highlight, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
                             }
@@ -705,7 +719,7 @@ fun MonthlyReportScreen(
                             )
                             Spacer(Modifier.height(12.dp))
                             report!!.monthlyHealthScore?.let { score ->
-                                AnimatedScoreRing(score, "MONTH", size = 120.dp)
+                                PercentRing(score, "MONTH", size = 120.dp)
                             }
                             report!!.deltaFromPreviousMonth?.let { delta ->
                                 Spacer(Modifier.height(8.dp))
@@ -713,7 +727,7 @@ fun MonthlyReportScreen(
                                 Text(
                                     "$sign${delta.toInt()} vs last month",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (delta >= 0) VitalGreen else VitalRed
+                                    color = if (delta >= 0) ActivityAccent else AlertRed
                                 )
                             }
                             report!!.explanation?.let {
@@ -773,7 +787,7 @@ fun MonthlyReportScreen(
                                     Modifier.fillMaxWidth().padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("•", color = VitalBlue, fontWeight = FontWeight.Bold)
+                                    Text("•", color = RecoveryAccent, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.width(8.dp))
                                     Text(factor, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
                                 }
@@ -874,6 +888,27 @@ fun SettingsScreen(
                 }
             }
 
+            // ── T-17 — Security ────────────────────────────────────────────
+            item { SectionHeader("Security") }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        NotificationToggleRow(
+                            label = stringResource(R.string.biometric_setting_title),
+                            description = if (state.biometricAvailable)
+                                stringResource(R.string.biometric_setting_body)
+                            else
+                                stringResource(R.string.biometric_unavailable),
+                            checked = state.biometricLockEnabled,
+                            // Offering a switch the device cannot honour would let the user
+                            // believe the app is locked when nothing is gating it.
+                            enabled = state.biometricAvailable,
+                            onCheckedChange = { viewModel.setBiometricLock(it) }
+                        )
+                    }
+                }
+            }
+
             // ── Data & Sync section ────────────────────────────────────────
             item { SectionHeader("Data & Sync") }
             item {
@@ -908,7 +943,7 @@ fun SettingsScreen(
                         }
                         state.backfillResult?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall,
-                                color = if (it.startsWith("✓")) VitalGreen else VitalRed)
+                                color = if (it.startsWith("✓")) ActivityAccent else AlertRed)
                         }
                     }
                 }
@@ -947,7 +982,7 @@ fun SettingsScreen(
                         }
                         state.exportResult?.let {
                             Text(it, style = MaterialTheme.typography.bodySmall,
-                                color = if (it.startsWith("✓")) VitalGreen else VitalRed)
+                                color = if (it.startsWith("✓")) ActivityAccent else AlertRed)
                         }
                     }
                 }
@@ -981,7 +1016,7 @@ private fun SettingsSliderRow(
             Text(label, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
             Text("${value.toInt()} $unit",
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = VitalBlue)
+                color = RecoveryAccent)
         }
         Slider(
             value = value,
@@ -1002,22 +1037,37 @@ private fun NotificationToggleRow(
     label: String,
     description: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            // T-19: the row is the target, not just the 32dp switch thumb, and it carries
+            // one merged label so a screen reader announces "<label>, <description>, on"
+            // rather than reading a switch with no name.
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange
+            )
+            .padding(vertical = 8.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "$label. $description" },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = OnBackground)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceDim)
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            // Null: the row above owns the click, and a nested clickable would double-fire
+            // and announce the control twice.
+            onCheckedChange = null,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = RecoveryAccent,
                 checkedTrackColor = RecoveryAccent.copy(alpha = 0.4f),

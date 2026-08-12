@@ -1,6 +1,9 @@
 package com.example.vitalcoreai.data.repository
 
 import com.example.vitalcoreai.analytics.*
+import com.example.vitalcoreai.core.time.VitalTime
+import com.example.vitalcoreai.debug.ErrorLog
+import com.example.vitalcoreai.debug.loggingFailures
 import com.example.vitalcoreai.data.db.dao.*
 import com.example.vitalcoreai.data.db.entity.*
 import com.example.vitalcoreai.data.UserPrefs
@@ -17,7 +20,7 @@ import javax.inject.Singleton
 
 @Singleton
 class HealthRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val healthConnectManager: HealthConnectManager,
     private val dailyMetricsDao: DailyMetricsDao,
     private val computedScoresDao: ComputedScoresDao,
@@ -58,6 +61,44 @@ class HealthRepository @Inject constructor(
 
         /** Intraday HR older than this is dropped — the table is otherwise unbounded. */
         const val HR_SAMPLE_RETENTION_DAYS = 35
+
+        /**
+         * How much prior history the score pipeline is handed.
+         *
+         * The widest consumer is [InsightDiscoveryEngine], which needs a long series before
+         * Bonferroni-corrected tests can clear their threshold at all.
+         */
+        const val PIPELINE_HISTORY_DAYS = 90
+    }
+
+    /**
+     * T-16 — memo for a generated report.
+     *
+     * Reports used to be regenerated on every sync. `syncToday` runs on a 4-hour periodic
+     * worker plus every manual refresh and every app launch, so the weekly and monthly
+     * reports were rebuilt tens of times a day from data that had not moved. The hash is
+     * over the rows the window actually reads, so a genuinely changed day still invalidates.
+     */
+    private data class ReportCacheEntry(val dataHash: Int, val generatedAtMs: Long)
+
+    private val reportCache = mutableMapOf<String, ReportCacheEntry>()
+
+    /** Test/debug hook — a synthetic-data load must not be masked by a stale memo. */
+    fun invalidateReportCache() = reportCache.clear()
+
+    /**
+     * True when [key]'s report was last generated from exactly [sources], so regenerating it
+     * would rewrite an identical row.
+     *
+     * Recording the hash on a miss is what makes the *next* call a hit; a caller that returns
+     * early on true must therefore not also need to write anything else.
+     */
+    private fun isReportUpToDate(key: String, vararg sources: List<Any>): Boolean {
+        val hash = sources.toList().hashCode()
+        val cached = reportCache[key]
+        if (cached != null && cached.dataHash == hash) return true
+        reportCache[key] = ReportCacheEntry(hash, VitalTime.nowMs())
+        return false
     }
 
     /** Result of a foreground [syncToday] call — used by [com.example.vitalcoreai.data.sync.SyncWorker] to decide which notifications to fire. */
@@ -69,7 +110,7 @@ class HealthRepository @Inject constructor(
     // ─── Sync from Health Connect → Room ─────────────────────────────────
 
     suspend fun syncToday(userAge: Int = 30, userMaxHR: Int = 190): SyncResult {
-        val today = LocalDate.now()
+        val today = VitalTime.today()
 
         if (!prefs.getBoolean(PREF_BACKFILL_DONE, false)) {
             backfillHistory(userAge, userMaxHR)
@@ -85,21 +126,21 @@ class HealthRepository @Inject constructor(
         val present = dailyMetricsDao.getPresentDays(gapStart, today.toEpochDay()).toSet()
         for (day in gapStart until today.toEpochDay()) {
             if (day !in present) {
-                runCatching { syncDay(LocalDate.ofEpochDay(day), userAge, userMaxHR, weightSeries) }
+                loggingFailures("syncDay(gap)") { syncDay(LocalDate.ofEpochDay(day), userAge, userMaxHR, weightSeries) }
             }
         }
 
         // Re-sync the trailing window so late-arriving sleep and workouts land.
         for (offset in TRAILING_RESYNC_DAYS downTo 1) {
-            runCatching { syncDay(today.minusDays(offset.toLong()), userAge, userMaxHR, weightSeries) }
+            loggingFailures("syncDay(trailing)") { syncDay(today.minusDays(offset.toLong()), userAge, userMaxHR, weightSeries) }
         }
 
         val newAchievements = syncDay(today, userAge, userMaxHR, weightSeries)
 
         // Keep reports current — they were only regenerated after a backfill or by the
         // weekly worker, so the Weekly Report screen could be up to a week stale.
-        runCatching { generateWeeklyReport(userAge, userMaxHR) }
-        runCatching { generateMonthlyReport(userAge, userMaxHR) }
+        loggingFailures("generateWeeklyReport") { generateWeeklyReport(userAge, userMaxHR) }
+        loggingFailures("generateMonthlyReport") { generateMonthlyReport(userAge, userMaxHR) }
         runCatching {
             heartRateSampleDao.deleteBefore(today.minusDays(HR_SAMPLE_RETENTION_DAYS.toLong()).toEpochDay())
         }
@@ -113,7 +154,7 @@ class HealthRepository @Inject constructor(
 
     /** Coverage inside a window: e.g. "46 of 90 days recorded". */
     suspend fun coverageInLastDays(days: Int): Int {
-        val today = LocalDate.now().toEpochDay()
+        val today = VitalTime.todayEpochDay()
         return dailyMetricsDao.countDaysWithDataInRange(today - days + 1, today)
     }
 
@@ -138,7 +179,7 @@ class HealthRepository @Inject constructor(
      */
     suspend fun backfillHistory(userAge: Int = 30, userMaxHR: Int = 190, force: Boolean = false) {
         if (!healthConnectManager.isAvailable()) return
-        val today = LocalDate.now()
+        val today = VitalTime.today()
         val windowStart = today.minusDays(BACKFILL_DAYS.toLong())
 
         // Day keys inside the backfill window specifically. getLatest(30) returned the
@@ -158,12 +199,12 @@ class HealthRepository @Inject constructor(
             // out of the loop, and be swallowed by SyncWorker's catch — leaving a partial
             // month with no indication why, which then retried identically forever because
             // PREF_BACKFILL_DONE is only set after the loop completes.
-            runCatching { syncDay(day, userAge, userMaxHR, weightSeries) }
+            loggingFailures("syncDay(backfill)") { syncDay(day, userAge, userMaxHR, weightSeries) }
         }
 
         // Regenerate weekly + monthly reports from backfilled data
-        runCatching { generateWeeklyReport(userAge, userMaxHR) }
-        runCatching { generateMonthlyReport(userAge, userMaxHR) }
+        loggingFailures("generateWeeklyReport") { generateWeeklyReport(userAge, userMaxHR) }
+        loggingFailures("generateMonthlyReport") { generateMonthlyReport(userAge, userMaxHR) }
 
         prefs.edit().putBoolean(PREF_BACKFILL_DONE, true).apply()
     }
@@ -180,7 +221,8 @@ class HealthRepository @Inject constructor(
         // single declined or unsupported type must degrade to null rather than unwind the
         // whole day. BodyFatRecord in particular is one Samsung Health often has no data
         // for, and a user can plausibly grant nine of ten.
-        suspend fun <T> read(block: suspend () -> T): T? = runCatching { block() }.getOrNull()
+        suspend fun <T> read(block: suspend () -> T): T? =
+            runCatching { block() }.onFailure { ErrorLog.record("HealthConnect read", it) }.getOrNull()
 
         val hrPoints = read { healthConnectManager.readHeartRateForDay(day) } ?: emptyList()
         val sleep = read { healthConnectManager.readNightForDay(day) }
@@ -216,11 +258,7 @@ class HealthRepository @Inject constructor(
 
         // A4 — Wear detection: did the watch actually appear to be worn (vs. charging /
         // phone-only / partial day), so a sensor gap is never scored as poor health.
-        val zone = java.time.ZoneId.systemDefault()
-        val hrMinutesOfDay = hrPoints.map { pt ->
-            val zdt = java.time.Instant.ofEpochMilli(pt.timestampMs).atZone(zone)
-            (zdt.hour * 60 + zdt.minute) to pt.bpm
-        }
+        val hrMinutesOfDay = hrPoints.map { pt -> VitalTime.minuteOfDay(pt.timestampMs) to pt.bpm }
         val wearStatus = WearDetector.detect(
             hrPointsWithMinuteOfDay = hrMinutesOfDay,
             hasSteps = (steps ?: 0) > 0,
@@ -244,6 +282,15 @@ class HealthRepository @Inject constructor(
             hrMinutesOfDay.isNotEmpty()  -> "WATCH_SENSOR"
             else                         -> null
         }
+
+        // Priority 2 — freshness. The v7 column existed but nothing ever wrote it, so
+        // DataQualityEngine's dataAgeHours was permanently null and every score was judged
+        // on completeness alone. A day can be complete and still be built from readings that
+        // stopped arriving thirty hours ago because the watch has not synced.
+        val newestRecordMs = listOfNotNull(
+            hrPoints.maxOfOrNull { it.timestampMs },
+            exerciseSessions.maxOfOrNull { it.endMs }
+        ).maxOrNull()
 
         dailyMetricsDao.upsert(
             DailyMetricsEntity(
@@ -271,7 +318,8 @@ class HealthRepository @Inject constructor(
                 dataSourceType = dataSourceType,
                 hrPointsPerHour = hrPointsPerHour,
                 partialDayFraction = partialDayFraction,
-                hasData = true
+                hasData = true,
+                newestRecordTimestampMs = newestRecordMs
             )
         )
 
@@ -295,7 +343,7 @@ class HealthRepository @Inject constructor(
             // Read HR over the session's ACTUAL span. Filtering the calendar-day list kept
             // only the pre-midnight portion of a late-evening workout, and the zone
             // calculator then fabricated a distribution from the remainder.
-            val hrForSession = if (session.endMs > day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()) {
+            val hrForSession = if (session.endMs > VitalTime.endOfDayExclusiveMs(day.toEpochDay())) {
                 read { healthConnectManager.readHeartRateBetween(session.startMs, session.endMs) } ?: emptyList()
             } else {
                 hrPoints.filter { it.timestampMs in session.startMs..session.endMs }
@@ -341,6 +389,86 @@ class HealthRepository @Inject constructor(
         return computeAndStoreScores(day, userAge, userMaxHR, overnightGapHours, hrPoints)
     }
 
+    /**
+     * Gather this day's inputs and run [ScorePipeline] WITHOUT persisting anything.
+     *
+     * Split out because two callers want it: [computeAndStoreScores], which writes the
+     * result, and the coach-context builder, which needs the typed engine results that the
+     * flattened columns cannot carry (a Forecast's full driver list, a TrendReport's
+     * contributors, the muscle statuses). Recomputing is cheap and pure; caching a second
+     * copy of the same numbers somewhere else is how the two would drift apart.
+     */
+    suspend fun runPipeline(
+        today: Long,
+        userAge: Int = UserPrefs.age(context),
+        userMaxHR: Int = UserPrefs.maxHR(context),
+        overnightHRGapHours: Double = 0.0,
+        todayHrPoints: List<HeartRatePoint> = emptyList()
+    ): ScorePipeline.Output? {
+        val metrics = dailyMetricsDao.getForDay(today) ?: return null
+        val history = dailyMetricsDao.getRange(today - PIPELINE_HISTORY_DAYS, today - 1)
+        val priorScores = computedScoresDao.getBeforeAscending(today, PIPELINE_HISTORY_DAYS)
+        val sessions = exerciseSessionDao.getRange(today - PIPELINE_HISTORY_DAYS, today)
+        val checkIns = checkInDao.getRange(today - PIPELINE_HISTORY_DAYS, today)
+
+        // Part 7 — HR recovery needs the samples in the three minutes after the day's last
+        // session ended.
+        val latestSession = sessions.filter { it.dateEpochDay == today }.maxByOrNull { it.endMs }
+        val postWorkoutSamples = if (latestSession?.maxHR != null) {
+            heartRateSampleDao.getForDay(today)
+                .filter { it.timestampMs > latestSession.endMs }
+                .sortedBy { it.timestampMs }
+                .map { ((it.timestampMs - latestSession.endMs) / 1000).toInt() to it.bpm }
+                .filter { it.first in 0..180 }
+        } else emptyList()
+
+        // Only claim as many days of training history as genuinely exist, so ACWR reports
+        // "needs more history" rather than a ratio built out of zero-filled absence.
+        val earliestDay = dailyMetricsDao.getEarliestDayWithData() ?: today
+        val daysAvailable = (today - earliestDay + 1).toInt().coerceAtLeast(0)
+
+        val output = ScorePipeline.compute(
+            ScorePipeline.Input(
+                todayEpochDay = today,
+                // A day still in progress is scored against the current clock; a day being
+                // re-scored after the fact is scored as at its own end, so "hours since
+                // trained" does not quietly come to mean "hours until now, several days on".
+                nowMinuteOfDay = if (today == VitalTime.todayEpochDay())
+                    VitalTime.nowMinuteOfDay() else VitalTime.MINUTES_PER_DAY - 1,
+                userAge = userAge,
+                userMaxHR = userMaxHR,
+                sleepNeedMinutes = UserPrefs.sleepNeedMinutes(context),
+                stepGoal = UserPrefs.stepGoal(context),
+                goal = runCatching {
+                    enumValueOf<RecommendationEngine.Goal>(UserPrefs.trainingGoal(context))
+                }.getOrDefault(RecommendationEngine.Goal.GENERAL_FITNESS),
+                today = metrics.toPipelineMetrics(),
+                history = history.map { it.toPipelineMetrics() },
+                priorScores = priorScores.map { it.toPipelineScores() },
+                sessions = sessions.map { it.toPipelineSession() },
+                todayHrPoints = todayHrPoints,
+                postWorkoutSamples = postWorkoutSamples,
+                checkIns = checkIns.map { it.toPipelineCheckIn() },
+                overnightHRGapHours = overnightHRGapHours,
+                daysOfHistoryAvailable = daysAvailable
+            )
+        )
+
+        return output
+    }
+
+    /**
+     * Score one day and persist the result.
+     *
+     * All the arithmetic lives in [ScorePipeline]; this function's entire job is to gather
+     * the inputs, hand them over, and write what comes back. That split is what makes the
+     * computation testable on the JVM — see `ScorePipelineTest`.
+     *
+     * Every history window read here is **exclusive of the day being scored**. `syncToday`
+     * re-runs the trailing three days on each sync, so a day is written many times; a
+     * history query that included today's own row would feed a previous run's output back
+     * into the current run's input, and the second sync would disagree with the first.
+     */
     private suspend fun computeAndStoreScores(
         day: LocalDate,
         userAge: Int,
@@ -350,354 +478,30 @@ class HealthRepository @Inject constructor(
     ): List<AchievementEngine.Achievement> {
         val today = day.toEpochDay()
         val metrics = dailyMetricsDao.getForDay(today) ?: return emptyList()
+        val output = runPipeline(today, userAge, userMaxHR, overnightHRGapHours, todayHrPoints)
+            ?: return emptyList()
 
-        val sleepNeedMinutes = UserPrefs.sleepNeedMinutes(context)
-        val stepGoal = UserPrefs.stepGoal(context)
+        computedScoresDao.upsert(output.toEntity(today))
 
-        // ── Baselines: the window ENDING THE DAY BEFORE the day being scored ──
-        //
-        // Two bugs in one line previously. `getLatest(30)` is ORDER BY dateEpochDay DESC
-        // LIMIT 30 — the newest rows in the table, not the 30 days preceding `day`. During
-        // the backfill loop (30 downTo 1) that meant every historical day was z-scored
-        // against a baseline made of its own FUTURE, so no historical score was
-        // reproducible. And the window included `day` itself, because syncDay upserts
-        // today's row before this runs — so each value was compared against a distribution
-        // containing itself, which pulls the mean toward the anomaly and inflates the std,
-        // systematically under-reporting exactly the deviations that matter most.
-        //
-        // getRange is ORDER BY dateEpochDay ASC, which also satisfies BaselineManager's
-        // documented "oldest first" contract that takeLast() depends on.
-        val past30Metrics = dailyMetricsDao.getRange(today - 30, today - 1)
-        val past14Metrics = dailyMetricsDao.getRange(today - 14, today - 1)
-        val past7Metrics = dailyMetricsDao.getRange(today - 7, today - 1)
-        val past7Exercise = exerciseSessionDao.getRange(today - 6, today)
-        val past28Exercise = exerciseSessionDao.getRange(today - 27, today)
-
-        fun DailyMetricsEntity.toSleepData(): SleepData? = sleepDurationMinutes?.let { dur ->
-            SleepData(
-                dateEpochDay = dateEpochDay,
-                durationMinutes = dur,
-                // Genuinely nullable — no fabricated 80.0. See SleepData.efficiencyPercent.
-                efficiencyPercent = sleepEfficiencyPercent,
-                bedtimeMinuteOfDay = bedtimeMinuteOfDay,
-                wakeTimeMinuteOfDay = wakeTimeMinuteOfDay,
-                remMinutes = sleepRemMinutes ?: 0,
-                deepMinutes = sleepDeepMinutes ?: 0,
-                lightMinutes = sleepLightMinutes ?: 0,
-                awakeMinutes = sleepAwakeMinutes ?: 0,
-                stagesAvailable = sleepStagesAvailable ?: false
-            )
-        }
-
-        val restingHRBaseline30 = past30Metrics.mapNotNull { m ->
-            m.restingHR?.let { RestingHRData(m.dateEpochDay, it) }
-        }
-        val sleepBaseline14 = past14Metrics.mapNotNull { it.toSleepData() }
-        val sleepPrior7 = past7Metrics.mapNotNull { it.toSleepData() }
-
-        val todaySleep = metrics.toSleepData()
-        val todayRHR = metrics.restingHR?.let { RestingHRData(today, it) }
-
-        // ── Per-day training load ─────────────────────────────────────────────
-        // Prior-day load is the sum of YESTERDAY's sessions, not "the most recent session
-        // within 7 days". The old maxByOrNull{startMs} gave a rest day a workout from up to
-        // six days ago — so recovery reported "Yesterday load: 78%" on a day the user did
-        // nothing — and it silently discarded second sessions on multi-session days.
-        val loadByDay: Map<Long, Float> = past28Exercise
-            .groupBy { it.dateEpochDay }
-            .mapValues { (_, sessions) ->
-                sessions.sumOf { (it.trainingLoadNormalized ?: 0f).toDouble() }.toFloat()
+        // Part 9 — muscle_recovery is a snapshot of the CURRENT state, so it is rewritten
+        // rather than appended to. Nothing wrote this table at all before now, which is why
+        // the muscle recovery card had no data behind it.
+        if (today == VitalTime.todayEpochDay()) {
+            runCatching {
+                muscleRecoveryDao.replaceAll(
+                    output.muscleStatuses.map { st ->
+                        MuscleRecoveryEntity(
+                            muscleGroup = st.group.name,
+                            lastTrainedEpochDay = today - (st.hoursSinceTrained / 24).toLong(),
+                            estimatedRecoveryHours = st.hoursSinceTrained + st.hoursRemaining,
+                            rpe = st.lastRpe,
+                            sorenessRating = st.sorenessRating,
+                            status = st.status.name
+                        )
+                    }
+                )
             }
-
-        val priorDaySessions = past7Exercise.filter { it.dateEpochDay == today - 1 }
-        val priorDayLoad: TrainingLoadData? = if (priorDaySessions.isEmpty()) {
-            // An explicit zero, not null: a day with no sessions is genuine rest, which is
-            // information, rather than missing data.
-            TrainingLoadData(today - 1, 0f, 0, HRZone.BELOW_ZONE1, hasHeartRateData = false)
-        } else {
-            TrainingLoadData(
-                dateEpochDay = today - 1,
-                normalizedLoad = priorDaySessions
-                    .sumOf { (it.trainingLoadNormalized ?: 0f).toDouble() }.toFloat().coerceAtMost(1f),
-                durationMinutes = priorDaySessions.sumOf { it.durationMinutes },
-                dominantZone = priorDaySessions
-                    .maxByOrNull { it.trainingLoadNormalized ?: 0f }
-                    ?.dominantZone?.let { runCatching { HRZone.valueOf(it) }.getOrNull() }
-                    ?: HRZone.ZONE2,
-                hasHeartRateData = priorDaySessions.any { it.hasHeartRateData }
-            )
         }
-
-        val todaySessions = past7Exercise.filter { it.dateEpochDay == today }
-        val todayLoadNormalized = todaySessions
-            .sumOf { (it.trainingLoadNormalized ?: 0f).toDouble() }.toFloat().coerceAtMost(1f)
-        val todayExerciseMinutes = todaySessions.sumOf { it.durationMinutes }
-
-        // ACWR over a zero-filled DAILY series — rest days must enter the denominator.
-        val acwrResult = AcwrCalculator.calculate(
-            AcwrCalculator.buildDailySeries(
-                loadByDay + mapOf(today to todayLoadNormalized), today, windowDays = 28
-            ).let { series ->
-                // Only report as many days as we genuinely have history for.
-                val earliest = dailyMetricsDao.getEarliestDayWithData() ?: today
-                val availableDays = (today - earliest + 1).toInt().coerceIn(0, 28)
-                series.takeLast(availableDays.coerceAtLeast(0))
-            }
-        )
-
-        // A4/A3 — Real data-quality signals (wear status, sensor density, history depth)
-        // instead of the always-true defaults, so a day the watch was left charging shows
-        // reduced confidence rather than a misleadingly confident low score.
-        val qualityInput = DataQualityEngine.QualityInput(
-            hasSleepToday = todaySleep != null,
-            hasHRToday = todayRHR != null,
-            hasWorkoutToday = todaySessions.isNotEmpty(),
-            hrPointsPerHour = metrics.hrPointsPerHour ?: 0.0,
-            sleepHistoryDays = sleepBaseline14.size,
-            hrHistoryDays = restingHRBaseline30.size,
-            overnightHRGapHours = overnightHRGapHours,
-            dataSourceType = when (metrics.dataSourceType) {
-                "WATCH_SENSOR" -> DataQualityEngine.DataSourceType.WATCH_SENSOR
-                "PHONE_SENSOR" -> DataQualityEngine.DataSourceType.PHONE_SENSOR
-                "MANUAL"       -> DataQualityEngine.DataSourceType.MANUAL
-                else           -> DataQualityEngine.DataSourceType.UNKNOWN
-            },
-            partialDayFraction = metrics.partialDayFraction ?: 1.0,
-            hasStepsToday = (metrics.steps ?: 0) > 0,
-            activityHistoryDays = past30Metrics.count { it.steps != null }
-        )
-
-        // Recovery score — capture full result to persist confidence & explanation
-        val recoveryResult = if (todaySleep != null && todayRHR != null) {
-            RecoveryScoreCalculator.calculate(
-                todaySleep = todaySleep,
-                sleepBaseline14Days = sleepBaseline14,
-                todayRestingHR = todayRHR,
-                restingHRBaseline30Days = restingHRBaseline30,
-                priorDayTrainingLoad = priorDayLoad,
-                spO2Percent = metrics.spO2Percent,
-                qualityInput = qualityInput,
-                personalSleepNeedMinutes = sleepNeedMinutes,
-                spO2ReadingCount = metrics.spO2ReadingCount ?: 0
-            )
-        } else null
-        val recoveryScore = recoveryResult?.score
-
-        // Sleep score — 7 PRIOR nights (excluding today, which the calculator appends
-        // itself) and the user's CONFIGURED sleep need, which was previously ignored.
-        val sleepResult = todaySleep?.let {
-            SleepScoreCalculator.calculate(
-                todaySleep = it,
-                last7Days = sleepPrior7,
-                personalSleepNeedMinutes = sleepNeedMinutes,
-                qualityInput = qualityInput
-            )
-        }
-        val sleepScore = sleepResult?.score
-
-        // ── Strain: the 0–21 logarithmic daily scale ──────────────────────────
-        val restingBaselineMean = BaselineManager
-            .restingHRBaseline(restingHRBaseline30.map { it.bpm.toDouble() }).mean
-        val strainQuality = DataQualityEngine.evaluate(qualityInput, DataQualityEngine.MetricProfile.STRAIN)
-        val strainResult = StrainCalculator.calculate(
-            hrPoints = todayHrPoints,
-            restingHRBaseline = restingBaselineMean,
-            maxHR = userMaxHR,
-            steps = metrics.steps,
-            exerciseMinutes = todayExerciseMinutes,
-            dataQuality = strainQuality
-        )
-
-        // Part 7 — Heart Rate Recovery from today's latest workout
-        val todayExercises = exerciseSessionDao.getForDay(today)
-        val latestSession = todayExercises.maxByOrNull { it.endMs }
-        val hrrResult = if (latestSession != null && latestSession.maxHR != null) {
-            // Read HR samples after the workout ended (up to 3 minutes post-workout)
-            val postWorkoutSamples = heartRateSampleDao.getForDay(today)
-                .filter { it.timestampMs > latestSession.endMs }
-                .sortedBy { it.timestampMs }
-                .map { ((it.timestampMs - latestSession.endMs) / 1000).toInt() to it.bpm }
-                .filter { it.first in 0..180 }  // only first 3 minutes
-            // Get historical HRR1 values for trend analysis
-            val historicalHrr1 = computedScoresDao.getLatestN(30).mapNotNull { it.hrr1 }
-            HRRecoveryCalculator.calculate(
-                peakHR = latestSession.maxHR!!,
-                postWorkoutSamples = postWorkoutSamples,
-                historicalHrr1 = historicalHrr1
-            )
-        } else null
-
-        // ── Sleep debt: 7-day rolling, EXCLUDING today (Part 10) ──────────────
-        // Delegated to SleepDebtCalculator, which adds three things a plain sum of
-        // deficits cannot express: sleep need estimated from the user's own longer
-        // nights rather than a fixed target, older deficits decaying in importance,
-        // and surplus sleep repaying debt only partially — you cannot bank sleep 1:1.
-        val highLoadDays = past28Exercise
-            .filter { (it.trainingLoadNormalized ?: 0f) > SleepDebtCalculator.HIGH_LOAD_THRESHOLD }
-            .map { it.dateEpochDay }
-            .toSet()
-        val sleepDebtResult = SleepDebtCalculator.calculate(
-            recentSleep = sleepPrior7,
-            highLoadDays = highLoadDays,
-            todayIsHighLoad = past7Exercise.any {
-                it.dateEpochDay == today && (it.trainingLoadNormalized ?: 0f) > SleepDebtCalculator.HIGH_LOAD_THRESHOLD
-            }
-        )
-        val sleepDebt = sleepDebtResult.debtMinutes
-        val readinessResult = recoveryScore?.let {
-            ReadinessScoreCalculator.calculate(
-                recoveryScore = it,
-                sleepDebtMinutes = sleepDebt,
-                acwrResult = acwrResult,
-                recoveryQuality = recoveryResult?.dataQuality ?: DataQualityReport.UNKNOWN,
-                nightsCounted = sleepPrior7.size.coerceAtLeast(1)
-            )
-        }
-        val readinessScore = readinessResult?.score
-
-        // Stress score — now fed the real quality input, so it can reach HIGH confidence.
-        val stressResult = todayRHR?.let {
-            TrendCalculators.calculateStressScore(
-                todayRestingHR = it.bpm,
-                baselineHR30Days = restingHRBaseline30,
-                priorDayHR = past30Metrics.lastOrNull { m -> m.dateEpochDay == today - 1 }?.restingHR,
-                qualityInput = qualityInput
-            )
-        }
-        val stressScore = stressResult?.score
-
-        // ── Activity ──────────────────────────────────────────────────────────
-        fun DailyMetricsEntity.toActivity() = steps?.let { s ->
-            DailyActivityData(
-                dateEpochDay = dateEpochDay,
-                steps = s,
-                distanceMeters = distanceMeters ?: 0f,
-                caloriesBurned = caloriesBurned ?: 0,
-                activeCalories = activeCalories
-            )
-        }
-        val past30Activity = past30Metrics.mapNotNull { it.toActivity() }
-        val activityResult = metrics.toActivity()?.let { todayActivity ->
-            TrendCalculators.calculateActivityScore(
-                today = todayActivity,
-                last30 = past30Activity,
-                priorDayActivity = past30Metrics.lastOrNull { it.dateEpochDay == today - 1 }?.toActivity(),
-                qualityInput = qualityInput
-            )
-        }
-        val activityScore = activityResult?.score
-
-        // Denominator is the days ACTUALLY RECORDED, not a hardcoded 30.
-        val consistencyScore = TrendCalculators.calculateConsistencyScore(past30Activity, stepGoal)
-
-        // VO2 Max — age-referenced, correct Uth coefficient.
-        val vo2Max = todayRHR?.let {
-            Vo2MaxEstimator.estimateFromRestingHR(it.bpm, userMaxHR, userAge).vo2Max
-        }
-
-        // Bio age
-        val bioAgeResult = vo2Max?.let {
-            BiologicalAgeEstimator.estimate(
-                chronologicalAge = userAge,
-                vo2Max = it,
-                restingHR30Days = restingHRBaseline30,
-                activityData30Days = past30Activity,
-                stepGoal = stepGoal
-            )
-        }
-        val bioAge = bioAgeResult?.takeIf { !it.insufficientData }?.estimatedAge
-
-        // ── B1 — Momentum ─────────────────────────────────────────────────────
-        // ASCENDING. MomentumCalculator documents its parameters as "newest last" and
-        // computes a slope over positional index; feeding it the DESC getLatestN() list
-        // negated that slope, so a recovery score climbing 55→75 was stored as DECLINING
-        // and the Home screen arrow pointed down. All three indicators were inverted.
-        val recent5Ascending = computedScoresDao.getLatestNAscending(5)
-        val last5Recovery = recent5Ascending.mapNotNull { it.recoveryScore }
-        val last5Sleep    = recent5Ascending.mapNotNull { it.sleepScore }
-        // Per-DAY strain, not per-session load — training momentum was previously computed
-        // over a session list, so it moved when sessions were logged rather than over time.
-        val last5Strain = recent5Ascending.mapNotNull { it.strain }.map { it / 21f * 100f }
-        val momentum = MomentumCalculator.calculate(last5Recovery, last5Sleep, last5Strain)
-
-        // Part 11 — Energy Bank calculation
-        val checkIn = checkInDao.getForDay(today)
-        val restDaysLast7 = run {
-            val exerciseDays = past7Exercise.map { it.dateEpochDay }.toSet()
-            (0..6).count { i -> (today - i) !in exerciseDays }
-        }
-        val sleepDurations7 = sleepPrior7.map { it.durationMinutes }
-        val energyBankResult = EnergyBankCalculator.calculate(
-            EnergyBankCalculator.EnergyBankInput(
-                sleepDurationsLast7 = sleepDurations7,
-                restDaysLast7 = restDaysLast7,
-                acwr = acwrResult.acwr,
-                stressScore = stressScore,
-                sorenessRating = checkIn?.soreness,
-                rhrDeviationBpm = todayRHR?.bpm?.takeIf { restingHRBaseline30.isNotEmpty() }?.let { bpm ->
-                    bpm - restingHRBaseline30.map { it.bpm }.average().toInt()
-                },
-                recoveryScore = recoveryScore,
-                trainingLoadNormalized = todayLoadNormalized
-            )
-        )
-
-        computedScoresDao.upsert(
-            ComputedScoresEntity(
-                dateEpochDay = today,
-                recoveryScore = recoveryScore,
-                recoveryConfidence = recoveryResult?.confidence?.name,
-                recoveryExplanation = recoveryResult?.explanation,
-                recoveryBreakdown = recoveryResult?.breakdown?.encodeToString(),
-                readinessScore = readinessScore,
-                readinessConfidence = readinessResult?.confidence?.name,
-                readinessExplanation = readinessResult?.explanation,
-                readinessBreakdown = readinessResult?.breakdown?.encodeToString(),
-                sleepScore = sleepScore,
-                sleepConfidence = sleepResult?.confidence?.name,
-                sleepExplanation = sleepResult?.explanation,
-                sleepBreakdown = sleepResult?.breakdown?.encodeToString(),
-                stressScore = stressScore,
-                stressConfidence = stressResult?.confidence?.name,
-                stressExplanation = stressResult?.explanation,
-                stressBreakdown = stressResult?.breakdown?.encodeToString(),
-                activityScore = activityScore,
-                consistencyScore = consistencyScore,
-                lifestyleScore = if (activityScore != null && sleepScore != null)
-                    TrendCalculators.calculateLifestyleScore(consistencyScore, activityScore, sleepScore).score
-                else null,
-                // Retained but demoted: this is now TODAY's actual summed session load,
-                // not a stale prior session, and it is no longer a display value anywhere.
-                // `strain` below replaces it in the UI.
-                trainingLoadNormalized = todayLoadNormalized,
-                strain = strainResult.strain,
-                dailyExertionMinutes = strainResult.exertionMinutes,
-                strainConfidence = strainResult.confidence.name,
-                strainExplanation = strainResult.explanation,
-                strainBreakdown = strainResult.breakdown.encodeToString(),
-                strainIsProxy = strainResult.isProxyEstimate,
-                strainZone = strainResult.zone?.name,
-                acwr = acwrResult.acwr,
-                acwrZone = acwrResult.zone.name,
-                acwrIsMeaningful = acwrResult.isMeaningful,
-                acwrDaysOfHistory = acwrResult.daysOfHistory,
-                vo2MaxEstimate = vo2Max,
-                biologicalAge = bioAge,
-                weeklyHealthScore = null,
-                monthlyHealthScore = null,
-                recoveryMomentum  = momentum.recovery.direction.name,
-                sleepMomentum     = momentum.sleep.direction.name,
-                trainingMomentum  = momentum.training.direction.name,
-                dataQualityLevel  = recoveryResult?.dataQuality?.level?.name,
-                dataQualityPercent = recoveryResult?.dataQuality?.confidencePercent,
-                energyBankScore       = energyBankResult.score,
-                energyBankExplanation = energyBankResult.explanation,
-                energyBankBreakdown   = energyBankResult.breakdown.encodeToString(),
-                hrr1 = hrrResult?.hrr1,
-                hrr2 = hrrResult?.hrr2,
-                hrrTrend = hrrResult?.trend?.name
-            )
-        )
 
         // ── B7 — Achievement evaluation ───────────────────────────────────────
         // Records come from queries scoped to days STRICTLY BEFORE today, so a personal
@@ -707,15 +511,15 @@ class HealthRepository @Inject constructor(
         // spent charging breaks the streak instead of being skipped over.
         val achievementInput = AchievementEngine.AchievementInput(
             todayEpochDay = today,
-            personalSleepNeedMinutes = sleepNeedMinutes,
-            stepGoal = stepGoal,
+            personalSleepNeedMinutes = UserPrefs.sleepNeedMinutes(context),
+            stepGoal = UserPrefs.stepGoal(context),
             sleepByDay = dailyMetricsDao.getSleepDurationsInRange(today - 400, today)
                 .associate { it.dateEpochDay to it.value },
             stepsByDay = dailyMetricsDao.getStepsInRange(today - 400, today)
                 .associate { it.dateEpochDay to it.value },
-            todayRecovery = recoveryScore,
+            todayRecovery = output.recoveryScore,
             todayRestingHR = metrics.restingHR,
-            todaySleepScore = sleepScore,
+            todaySleepScore = output.sleepScore,
             priorBestRecovery = computedScoresDao.getBestRecoveryBefore(today),
             priorLowestRestingHR = dailyMetricsDao.getLowestRestingHRBefore(today),
             priorBestSleepScore = computedScoresDao.getBestSleepScoreBefore(today),
@@ -736,6 +540,163 @@ class HealthRepository @Inject constructor(
             })
         }
         return newAchievements
+    }
+
+    // ─── Room ⇄ ScorePipeline mapping ─────────────────────────────────────────
+    //
+    // Straight field copies, deliberately kept next to the database rather than inside the
+    // analytics package — see the module-boundary note at the top of ScorePipeline.kt.
+
+    private fun DailyMetricsEntity.toPipelineMetrics() = ScorePipeline.DayMetrics(
+        dateEpochDay = dateEpochDay,
+        restingHR = restingHR,
+        steps = steps,
+        distanceMeters = distanceMeters,
+        caloriesBurned = caloriesBurned,
+        activeCalories = activeCalories,
+        spO2Percent = spO2Percent,
+        spO2ReadingCount = spO2ReadingCount,
+        sleepDurationMinutes = sleepDurationMinutes,
+        sleepEfficiencyPercent = sleepEfficiencyPercent,
+        sleepDeepMinutes = sleepDeepMinutes,
+        sleepRemMinutes = sleepRemMinutes,
+        sleepLightMinutes = sleepLightMinutes,
+        sleepAwakeMinutes = sleepAwakeMinutes,
+        sleepStagesAvailable = sleepStagesAvailable,
+        bedtimeMinuteOfDay = bedtimeMinuteOfDay,
+        wakeTimeMinuteOfDay = wakeTimeMinuteOfDay,
+        dataSourceType = dataSourceType,
+        hrPointsPerHour = hrPointsPerHour,
+        partialDayFraction = partialDayFraction,
+        dataAgeHours = newestRecordTimestampMs?.let { newest ->
+            (VitalTime.nowMs() - newest).coerceAtLeast(0L) / 3_600_000.0
+        }
+    )
+
+    private fun ComputedScoresEntity.toPipelineScores() = ScorePipeline.DayScores(
+        dateEpochDay = dateEpochDay,
+        recoveryScore = recoveryScore,
+        readinessScore = readinessScore,
+        sleepScore = sleepScore,
+        strain = strain,
+        energyBankScore = energyBankScore,
+        hrr1 = hrr1
+    )
+
+    private fun ExerciseSessionEntity.toPipelineSession() = ScorePipeline.Session(
+        dateEpochDay = dateEpochDay,
+        startMs = startMs,
+        endMs = endMs,
+        exerciseType = exerciseType,
+        durationMinutes = durationMinutes,
+        trainingLoadNormalized = trainingLoadNormalized,
+        dominantZone = dominantZone,
+        hasHeartRateData = hasHeartRateData,
+        maxHR = maxHR,
+        rpe = rpe,
+        endMinuteOfDay = VitalTime.minuteOfDay(endMs)
+    )
+
+    private fun CheckInEntity.toPipelineCheckIn() = ScorePipeline.CheckIn(
+        dateEpochDay = dateEpochDay,
+        energy = energy,
+        stress = stress,
+        soreness = soreness,
+        sleepQuality = sleepQuality,
+        mood = mood
+    )
+
+    private fun ScorePipeline.Output.toEntity(dateEpochDay: Long) = ComputedScoresEntity(
+        dateEpochDay = dateEpochDay,
+        recoveryScore = recoveryScore,
+        recoveryConfidence = recoveryConfidence,
+        recoveryExplanation = recoveryExplanation,
+        recoveryBreakdown = recoveryBreakdown,
+        readinessScore = readinessScore,
+        readinessConfidence = readinessConfidence,
+        readinessExplanation = readinessExplanation,
+        readinessBreakdown = readinessBreakdown,
+        sleepScore = sleepScore,
+        sleepConfidence = sleepConfidence,
+        sleepExplanation = sleepExplanation,
+        sleepBreakdown = sleepBreakdown,
+        stressScore = stressScore,
+        stressConfidence = stressConfidence,
+        stressExplanation = stressExplanation,
+        stressBreakdown = stressBreakdown,
+        activityScore = activityScore,
+        consistencyScore = consistencyScore,
+        lifestyleScore = lifestyleScore,
+        trainingLoadNormalized = trainingLoadNormalized,
+        acwr = acwr,
+        acwrZone = acwrZone,
+        acwrIsMeaningful = acwrIsMeaningful,
+        acwrDaysOfHistory = acwrDaysOfHistory,
+        vo2MaxEstimate = vo2MaxEstimate,
+        biologicalAge = biologicalAge,
+        weeklyHealthScore = null,
+        monthlyHealthScore = null,
+        recoveryMomentum = recoveryMomentum,
+        sleepMomentum = sleepMomentum,
+        trainingMomentum = trainingMomentum,
+        dataQualityLevel = dataQualityLevel,
+        dataQualityPercent = dataQualityPercent,
+        energyBankScore = energyBankScore,
+        energyBankExplanation = energyBankExplanation,
+        energyBankBreakdown = energyBankBreakdown,
+        hrr1 = hrr1,
+        hrr2 = hrr2,
+        hrrTrend = hrrTrend,
+        strain = strain,
+        dailyExertionMinutes = dailyExertionMinutes,
+        strainConfidence = strainConfidence,
+        strainExplanation = strainExplanation,
+        strainBreakdown = strainBreakdown,
+        strainIsProxy = strainIsProxy,
+        strainZone = strainZone,
+        // ── v7 ───────────────────────────────────────────────────────────────
+        forecastLow = forecastLow,
+        forecastHigh = forecastHigh,
+        forecastConfidence = forecastConfidence,
+        forecastDrivers = forecastDrivers,
+        forecastRisks = forecastRisks,
+        sleepConsistencyScore = sleepConsistencyScore,
+        sleepConsistencyLabel = sleepConsistencyLabel,
+        bedtimeSdMinutes = bedtimeSdMinutes,
+        wakeSdMinutes = wakeSdMinutes,
+        trend7Direction = trend7Direction,
+        trend14Direction = trend14Direction,
+        trend30Direction = trend30Direction,
+        trendContributors = trendContributors,
+        anomaliesEncoded = anomaliesEncoded,
+        anomalyCount = anomalyCount,
+        recommendationType = recommendationType,
+        recommendationIntensity = recommendationIntensity,
+        recommendationVolumePct = recommendationVolumePct,
+        recommendationDetail = recommendationDetail,
+        dataQualityFactors = dataQualityFactors,
+        dataQualityPositives = dataQualityPositives,
+        // Derived from the day rather than System.currentTimeMillis(), so re-scoring the
+        // same day from the same data produces an identical row and the idempotency test
+        // is testing the pipeline rather than the clock.
+        createdAtMs = VitalTime.startOfDayMs(dateEpochDay)
+    )
+
+    /**
+     * Recompute and persist one day's scores from data already in Room.
+     *
+     * No Health Connect read — the day's raw metrics must already exist. Used by the debug
+     * screen after loading a synthetic scenario, where there is nothing to fetch and the
+     * whole point is to exercise the engines over fixture data.
+     */
+    suspend fun rescoreDay(epochDay: Long) {
+        computeAndStoreScores(
+            day = LocalDate.ofEpochDay(epochDay),
+            userAge = UserPrefs.age(context),
+            userMaxHR = UserPrefs.maxHR(context),
+            todayHrPoints = heartRateSampleDao.getForDay(epochDay)
+                .map { HeartRatePoint(it.timestampMs, it.bpm) }
+        )
     }
 
     fun latestScores(): Flow<ComputedScoresEntity?> = computedScoresDao.getLatest()
@@ -784,7 +745,7 @@ class HealthRepository @Inject constructor(
      * structurally pinned near zero.
      */
     suspend fun generateWeeklyReport(userAge: Int = 30, userMaxHR: Int = 190) {
-        val todayDate = LocalDate.now()
+        val todayDate = VitalTime.today()
         val today = todayDate.toEpochDay()
         // Monday of the current week.
         val weekStartDate = todayDate.minusDays((todayDate.dayOfWeek.value - 1).toLong())
@@ -793,6 +754,11 @@ class HealthRepository @Inject constructor(
 
         val scores = computedScoresDao.getRange(weekStart, weekEnd)
         if (scores.isEmpty()) return
+
+        // T-16 — skip the rebuild when nothing inside the window has changed. The hash is
+        // taken over the rows this report actually reads, so a late-arriving night still
+        // invalidates it; only a genuinely identical window is short-circuited.
+        if (isReportUpToDate("week:$weekStart", scores)) return
 
         fun avg(values: List<Float>): Float? =
             if (values.isEmpty()) null else values.average().toFloat()
@@ -841,12 +807,17 @@ class HealthRepository @Inject constructor(
      * personal records + ranked contributing factors from the raw daily data.
      */
     suspend fun generateMonthlyReport(userAge: Int = 30, userMaxHR: Int = 190) {
-        val today = LocalDate.now()
+        val today = VitalTime.today()
         val todayEpoch = today.toEpochDay()
         val monthStart = today.withDayOfMonth(1).toEpochDay()
 
         val scores = computedScoresDao.getRange(monthStart, todayEpoch)
         if (scores.isEmpty()) return
+
+        val monthMetrics = dailyMetricsDao.getRange(monthStart, todayEpoch)
+        // T-16 — see the note in generateWeeklyReport. The monthly report also reads the raw
+        // metrics for its personal records, so both lists enter the hash.
+        if (isReportUpToDate("month:$monthStart", scores, monthMetrics)) return
 
         fun avg(values: List<Float>): Float? =
             if (values.isEmpty()) null else values.average().toFloat()
@@ -872,17 +843,26 @@ class HealthRepository @Inject constructor(
         )
 
         // Personal records for the month
-        val metrics = dailyMetricsDao.getRange(monthStart, todayEpoch)
+        val metrics = monthMetrics
         val personalRecords = buildList {
-            scores.filter { it.recoveryScore != null }.maxByOrNull { it.recoveryScore!! }?.let {
-                add("Best Recovery: ${it.recoveryScore!!.toInt()} on ${LocalDate.ofEpochDay(it.dateEpochDay)}")
-            }
-            metrics.filter { it.restingHR != null }.minByOrNull { it.restingHR!! }?.let {
-                add("Lowest Resting HR: ${it.restingHR} bpm on ${LocalDate.ofEpochDay(it.dateEpochDay)}")
-            }
-            metrics.filter { it.sleepDurationMinutes != null }.maxByOrNull { it.sleepDurationMinutes!! }?.let {
-                add("Longest Sleep: ${it.sleepDurationMinutes!! / 60}h ${it.sleepDurationMinutes!! % 60}m on ${LocalDate.ofEpochDay(it.dateEpochDay)}")
-            }
+            // Pair the row with its non-null value up front rather than filtering and then
+            // re-asserting: `!!` on a value the filter already guaranteed reads as a risk
+            // where there is none, and hides the one place a genuine null could appear.
+            scores.mapNotNull { row -> row.recoveryScore?.let { row to it } }
+                .maxByOrNull { it.second }?.let { (row, score) ->
+                    add("Best Recovery: ${score.toInt()} on ${LocalDate.ofEpochDay(row.dateEpochDay)}")
+                }
+            metrics.mapNotNull { row -> row.restingHR?.let { row to it } }
+                .minByOrNull { it.second }?.let { (row, bpm) ->
+                    add("Lowest Resting HR: $bpm bpm on ${LocalDate.ofEpochDay(row.dateEpochDay)}")
+                }
+            metrics.mapNotNull { row -> row.sleepDurationMinutes?.let { row to it } }
+                .maxByOrNull { it.second }?.let { (row, minutes) ->
+                    add(
+                        "Longest Sleep: ${VitalTime.formatDurationMinutes(minutes)} on " +
+                            LocalDate.ofEpochDay(row.dateEpochDay)
+                    )
+                }
         }
 
         // Ranked contributing factors — vs previous month if available, otherwise plain averages

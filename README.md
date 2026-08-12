@@ -12,10 +12,9 @@
 
 ## 📲 Direct APK Download
 
-You can download the pre-compiled Android APK directly using either of the following links:
+You can download the pre-compiled Android APK directly using the link below:
 
-- **🚀 [Download Latest APK (GitHub Releases v1.0.0)](https://github.com/Shauurrya/VitalCoreAI/releases/download/v1.0.0/VitalCoreAI-debug.apk)** *(Recommended — fast CDN direct download)*
-- **📁 [Browse APK in Repository (`/apk/VitalCoreAI-debug.apk`)](https://github.com/Shauurrya/VitalCoreAI/tree/main/apk)**
+- **🚀 [Download Latest APK (GitHub Release v1.1.0)](https://github.com/Shauurrya/VitalCoreAI/releases/download/v1.1.0/VitalCoreAI-v1.1.0-debug.apk)** *(Recommended — fast CDN direct download)*
 
 ---
 
@@ -24,9 +23,19 @@ You can download the pre-compiled Android APK directly using either of the follo
 - **⚡ Readiness & Recovery Scores**: Calculates daily recovery metrics by benchmarking Resting Heart Rate (RHR), sleep duration, and activity against your 28-day personal baselines.
 - **😴 Sleep Debt & Stage Analytics**: Detailed breakdown of sleep efficiency, sleep debt accumulation, and sleep architecture (Deep, REM, Light, Awake).
 - **🔥 Day Strain & ACWR Workload Engine**: Uses Acute-to-Chronic Workload Ratio (ACWR) to monitor training intensity and safeguard against overtraining and injury risks.
-- **🧬 Biological Age Estimation**: Computes cardiovascular resilience and functional fitness indicators to project your physiological age.
+- **🧬 Fitness Age (estimate)**: Computes cardiovascular resilience and functional fitness indicators from VO₂ Max, resting-HR trend and activity. An estimate from published research — never presented as a measurement.
 - **🔄 Health Connect Synchronization**: Full integration with Android Health Connect to ingest metrics from Samsung Galaxy Watches, Pixel Watches, Fitbit, and Garmin hardware.
 - **🛡️ Adaptive Data Quality Engine**: Intelligent fallback algorithms (e.g., trimmed overnight RHR estimation) when certain hardware metrics (like raw beat-to-beat IBI) are restricted by wearable firmware.
+
+### New in v1.1
+
+- **🔮 Tomorrow's Readiness — as a range, never a point**: seven named, signed drivers move the centre; the band's *width* comes from your own day-to-day volatility, so a steady month narrows it and an erratic one widens it. A single number would imply precision the data does not support.
+- **📈 7 / 14 / 30-day trends with attribution**: Mann-Kendall significance plus a Theil-Sen slope, and the top three contributors behind each direction — not just an arrow.
+- **⚠️ Personal anomaly detection**: deviations measured against *your* cleaned baseline, never a population norm. Co-occurrence is reported; causation never is. A favourable move (a lower resting HR) is never flagged.
+- **🏋️ Training recommendation**: type, intensity and a signed volume adjustment, capped so no combination of good signals can produce a hard session on a day the recovery data disagrees.
+- **🛌 Sleep consistency**: bedtime and wake regularity scored with circular statistics, so drifting either side of midnight is not read as chaos.
+- **💪 Muscle recovery that learns**: per-group recovery times derived from the gaps you actually take, excluding cycles that followed a high soreness report.
+- **🔐 Optional biometric lock**, **🚀 nine-step onboarding**, and a hidden **developer screen** (triple-tap the title, debug builds only) with nine deterministic 30-day scenarios and a live preview of the AI-context payload.
 
 ---
 
@@ -40,13 +49,14 @@ You can download the pre-compiled Android APK directly using either of the follo
 | **Data Persistence** | Room Database with Flow streaming |
 | **Background Sync** | Android WorkManager |
 | **Biometric Ingestion** | Android Health Connect API (`androidx.health.connect:connect-client`) |
+| **Device Lock** | `androidx.biometric` (optional; delegates to the platform prompt) |
 | **Asynchronous Engine** | Kotlin Coroutines & StateFlow |
 
 ---
 
 ## 📥 How to Install
 
-1. Download the [`VitalCoreAI-debug.apk`](https://github.com/Shauurrya/VitalCoreAI/releases/download/v1.0.0/VitalCoreAI-debug.apk) file to your Android phone.
+1. Download the [`VitalCoreAI-v1.1.0-debug.apk`](https://github.com/Shauurrya/VitalCoreAI/releases/download/v1.1.0/VitalCoreAI-v1.1.0-debug.apk) file to your Android phone.
 2. Open the file on your device and approve **"Install from unknown sources"** if prompted by Android.
 3. Launch **VitalCore AI** and follow the onboarding steps to grant **Health Connect** permissions.
 4. Ensure your smartwatch sync app (e.g. Samsung Health, Google Fit, or Garmin Connect) is set to sync with Health Connect.
@@ -57,8 +67,6 @@ You can download the pre-compiled Android APK directly using either of the follo
 
 ```
 VitalCoreAI/
-├── apk/                             # Downloadable APK area
-│   └── VitalCoreAI-debug.apk
 ├── app/
 │   └── src/main/java/com/example/vitalcoreai/
 │       ├── analytics/               # Biological Age, RHR, Strain, ACWR & Sleep Calculators
@@ -71,6 +79,19 @@ VitalCoreAI/
     ├── ANALYTICS_MODULE.md
     └── CAPABILITY_MATRIX.md
 ```
+
+---
+
+## 🔒 Privacy
+
+VitalCore has **no `INTERNET` permission**, no HTTP client in its dependency tree, no account
+and no server. Every score is computed on the device from data already in Health Connect.
+Both facts are asserted by a unit test (`MedicalSafetyTest`), so adding a network path would
+be a deliberate act rather than an accident.
+
+The AI coach answers from a rules engine running locally. `CoachContext` can produce the exact
+JSON payload a cloud model would receive — the developer screen renders it — but nothing sends
+it anywhere.
 
 ---
 

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import javax.inject.Inject
+import com.example.vitalcoreai.core.time.VitalTime
+import com.example.vitalcoreai.core.time.perDay
 
 // ─── Recovery ────────────────────────────────────────────────────────────────
 
@@ -37,7 +39,7 @@ class RecoveryViewModel @Inject constructor(private val repository: HealthReposi
     init { load() }
 
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay())
+        perDay { day -> repository.scoresFrom(day - 30) }
             .collect { scores ->
                 val latest = scores.lastOrNull()
                 _state.value = ScoreDetailUiState(
@@ -61,7 +63,7 @@ class ReadinessViewModel @Inject constructor(private val repository: HealthRepos
     val state: StateFlow<ScoreDetailUiState> = _state.asStateFlow()
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
             _state.value = ScoreDetailUiState(
                 score = latest?.readinessScore,
@@ -98,7 +100,7 @@ class SleepViewModel @Inject constructor(private val repository: HealthRepositor
 
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
             _state.value = ScoreDetailUiState(
                 score = latest?.sleepScore,
@@ -115,7 +117,7 @@ class SleepViewModel @Inject constructor(private val repository: HealthRepositor
 
     init { loadSleepDebt() }
     private fun loadSleepDebt() = viewModelScope.launch {
-        repository.metricsFrom(LocalDate.now().minusDays(14).toEpochDay()).collect { metrics ->
+        perDay { day -> repository.metricsFrom(day - 14) }.collect { metrics ->
             val last14 = metrics.sortedByDescending { it.dateEpochDay }.take(14)
             val last7 = last14.take(7)
 
@@ -134,7 +136,7 @@ class SleepViewModel @Inject constructor(private val repository: HealthRepositor
                 .sumOf { maxOf(0, personalSleepNeedMinutes - it) }
 
             val recommendation = when {
-                rollingDebt > 300 -> "You have significant sleep debt. Try to add 30-60 min to your next few nights. Aim for bed by 9:30 PM."
+                rollingDebt > 300 -> "Sleep debt is significant. Adding 30-60 min to the next few nights would close it. Aim for bed by 9:30 PM."
                 rollingDebt > 120 -> "Moderate sleep debt. An extra 20 min tonight will help. Target lights-out by 10:00 PM."
                 rollingDebt > 0 -> "Slight sleep debt — nothing concerning. Maintain your current routine."
                 else -> "You're sleep-positive this week! Your recovery capacity is maximized."
@@ -168,7 +170,7 @@ class HeartViewModel @Inject constructor(private val repository: HealthRepositor
     val state: StateFlow<HeartUiState> = _state.asStateFlow()
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.metricsFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { metrics ->
+        perDay { day -> repository.metricsFrom(day - 30) }.collect { metrics ->
             val rhrValues = metrics.mapNotNull { it.restingHR?.toFloat() }
             _state.value = HeartUiState(
                 restingHR = metrics.lastOrNull()?.restingHR,
@@ -189,7 +191,7 @@ class StressViewModel @Inject constructor(private val repository: HealthReposito
     val state: StateFlow<ScoreDetailUiState> = _state.asStateFlow()
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
             _state.value = ScoreDetailUiState(
                 score = latest?.stressScore,
@@ -223,8 +225,8 @@ class ActivityViewModel @Inject constructor(private val repository: HealthReposi
     init { load() }
     private fun load() = viewModelScope.launch {
         combine(
-            repository.metricsFrom(LocalDate.now().minusDays(30).toEpochDay()),
-            repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay())
+            perDay { day -> repository.metricsFrom(day - 30) },
+            perDay { day -> repository.scoresFrom(day - 30) }
         ) { metrics, scores ->
             val today = metrics.lastOrNull()
             ActivityUiState(
@@ -255,7 +257,7 @@ class TrainingViewModel @Inject constructor(private val repository: HealthReposi
     val state: StateFlow<TrainingUiState> = _state.asStateFlow()
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(30).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
             _state.value = TrainingUiState(
                 todayLoad = latest?.trainingLoadNormalized?.let { it * 100 },
@@ -283,7 +285,7 @@ data class BioAgeUiState(
 @HiltViewModel
 class BiologicalAgeViewModel @Inject constructor(
     private val repository: HealthRepository,
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
     private val _state = MutableStateFlow(BioAgeUiState())
     val state: StateFlow<BioAgeUiState> = _state.asStateFlow()
@@ -317,7 +319,7 @@ data class InsightsUiState(
 @HiltViewModel
 class InsightsViewModel @Inject constructor(
     private val repository: HealthRepository,
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(InsightsUiState())
@@ -328,7 +330,7 @@ class InsightsViewModel @Inject constructor(
     private fun load() = viewModelScope.launch {
         combine(
             repository.latestScores(),
-            repository.metricsFrom(LocalDate.now().minusDays(14).toEpochDay()),
+            perDay { day -> repository.metricsFrom(day - 14) },
             repository.earnedAchievements()
         ) { scores, metricsList, earned ->
             val todayMetrics = metricsList.lastOrNull()
@@ -368,7 +370,11 @@ class InsightsViewModel @Inject constructor(
                             SleepData(
                                 dateEpochDay        = m.dateEpochDay,
                                 durationMinutes     = dur,
-                                efficiencyPercent   = m.sleepEfficiencyPercent?.toDouble() ?: 83.0,
+                                // Passed through as null when the source had no stage detail.
+                                // Substituting a plausible-looking 83.0 made a night with no
+                                // stages score as an average one — see SleepData.efficiencyPercent,
+                                // which is nullable precisely so this cannot be fabricated.
+                                efficiencyPercent   = m.sleepEfficiencyPercent,
                                 bedtimeMinuteOfDay  = m.bedtimeMinuteOfDay,
                                 wakeTimeMinuteOfDay = m.wakeTimeMinuteOfDay,
                                 remMinutes          = m.sleepRemMinutes   ?: 0,
@@ -442,7 +448,7 @@ class HistoryViewModel @Inject constructor(private val repository: HealthReposit
     val state: StateFlow<HistoryUiState> = _state.asStateFlow()
     init { load() }
     private fun load() = viewModelScope.launch {
-        repository.scoresFrom(LocalDate.now().minusDays(90).toEpochDay()).collect { scores ->
+        perDay { day -> repository.scoresFrom(day - 90) }.collect { scores ->
             _state.value = HistoryUiState(scores = scores, isLoading = false)
         }
     }
@@ -483,12 +489,16 @@ data class SettingsUiState(
     val backfillResult: String? = null,
     // B9 — CSV export state
     val isExporting: Boolean = false,
-    val exportResult: String? = null
+    val exportResult: String? = null,
+    // T-17 — biometric lock
+    val biometricLockEnabled: Boolean = false,
+    val biometricAvailable: Boolean = false,
+    val trainingGoal: String = UserPrefs.DEFAULT_TRAINING_GOAL
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val repository: HealthRepository,
     private val exporter: com.example.vitalcoreai.data.export.HealthDataExporter
 ) : ViewModel() {
@@ -519,8 +529,27 @@ class SettingsViewModel @Inject constructor(
         notifyDailySummary = prefs.getBoolean(KEY_NOTIFY_DAILY, true),
         notifyWeeklyReport = prefs.getBoolean(KEY_NOTIFY_WEEKLY, true),
         notifyAchievements = prefs.getBoolean(KEY_NOTIFY_ACHIEVEMENTS, true),
-        notifyCoachAlerts = prefs.getBoolean(KEY_NOTIFY_COACH, true)
+        notifyCoachAlerts = prefs.getBoolean(KEY_NOTIFY_COACH, true),
+        biometricLockEnabled = UserPrefs.biometricLockEnabled(context),
+        biometricAvailable = com.example.vitalcoreai.security.BiometricLock
+            .availability(context) == com.example.vitalcoreai.security.BiometricLock.Availability.AVAILABLE,
+        trainingGoal = UserPrefs.trainingGoal(context)
     )
+
+    /**
+     * T-17. Written through [UserPrefs] rather than this class private prefs handle so the
+     * key has exactly one definition — SettingsViewModel duplicating UserPrefs key strings
+     * is how sleep_need_hours ended up written as a Float and read as an Int.
+     */
+    fun setBiometricLock(enabled: Boolean) {
+        UserPrefs.setBiometricLockEnabled(context, enabled)
+        _state.update { it.copy(biometricLockEnabled = enabled) }
+    }
+
+    fun setTrainingGoal(goal: String) {
+        UserPrefs.setTrainingGoal(context, goal)
+        _state.update { it.copy(trainingGoal = goal) }
+    }
 
     fun setAge(age: Int) {
         _state.update { it.copy(userAge = age) }
