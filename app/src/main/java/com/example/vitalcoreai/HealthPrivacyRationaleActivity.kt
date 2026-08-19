@@ -74,18 +74,23 @@ class HealthPrivacyRationaleActivity : ComponentActivity() {
                         RationaleSection(
                             title = "What data does VitalCore AI read?",
                             body = """
-VitalCore AI reads the following data types from Health Connect, synced from your Samsung Galaxy Watch:
+VitalCore AI reads the following data types from Health Connect. The source is whichever
+watch, band, ring or app syncs to Health Connect on your phone — VitalCore reads what lands
+there and never talks to a device directly.
 
 • Heart Rate — used to compute Recovery Score and detect training load
 • Resting Heart Rate — baseline cardiovascular health indicator
+• Heart Rate Variability (RMSSD) — autonomic recovery signal, when your device supplies it
 • Sleep Sessions — duration, stages (REM, deep, light, awake), efficiency
 • Steps & Distance — daily activity scoring
-• Total Calories Burned — activity intensity and energy balance
+• Total & Active Calories Burned — activity intensity and energy balance
 • Exercise Sessions — training load and ACWR calculation
 • Oxygen Saturation (SpO₂) — stress and recovery quality
 • Weight & Body Fat — Fitness Age and VO₂ Max estimates
+• VO₂ Max, Floors Climbed, Elevation Gained, Speed — used when present
 
-HRV (Heart Rate Variability) and Skin Temperature are explicitly NOT read.
+Not every device supplies every type. A type your device does not write is simply never
+read, and the features built on it do not appear. Skin Temperature is not read.
                             """.trimIndent()
                         )
 
@@ -117,7 +122,9 @@ No. All health data stays on your phone inside the app's private database.
 • No analytics SDK, no crash reporting that leaks health data
 • No advertising SDK
 • No Firebase, no cloud backup of health records
-• The only network request is the Health Connect SDK itself (reading from the Health Connect database on your phone)
+• The app makes no network requests at all — it does not hold the INTERNET permission, and
+  contains no HTTP client. Reading from Health Connect is a local call to another app on
+  your phone, not a network call.
 
 You can revoke access at any time via Health Connect → App permissions → VitalCore AI.
                             """.trimIndent()

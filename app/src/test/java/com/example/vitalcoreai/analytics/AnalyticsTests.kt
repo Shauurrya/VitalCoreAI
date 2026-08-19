@@ -100,8 +100,29 @@ class RecoveryScoreCalculatorTest {
 
 class SleepScoreCalculatorTest {
 
+    /**
+     * A night WITH stage detail.
+     *
+     * `stagesAvailable` must be passed explicitly: it defaults to false, and a fixture
+     * carrying non-zero deep/REM minutes while claiming no stages were reported is a state
+     * `HealthConnectManager` cannot produce — it sets `stagesAvailable = hasStages`, derived
+     * from the record's own stage list. Leaving it false made these fixtures exercise the
+     * stage-less path while reading as if they tested the stage path.
+     */
     private fun sleep(durationMin: Int = 480, efficiency: Double = 85.0, deep: Int = 90, rem: Int = 100) =
-        SleepData(0L, durationMin, efficiency, 23 * 60, 7 * 60, rem, deep, durationMin - deep - rem - 30, 30)
+        SleepData(
+            0L, durationMin, efficiency, 23 * 60, 7 * 60,
+            rem, deep, durationMin - deep - rem - 30, 30,
+            stagesAvailable = true
+        )
+
+    /** A night the source recorded with no stage breakdown at all. */
+    private fun sleepNoStages(durationMin: Int = 480, efficiency: Double = 85.0) =
+        SleepData(
+            0L, durationMin, efficiency, 23 * 60, 7 * 60,
+            0, 0, 0, 0,
+            stagesAvailable = false
+        )
 
     @Test
     fun `score is in 0 to 100 range`() {
@@ -121,6 +142,59 @@ class SleepScoreCalculatorTest {
         val noStages = SleepScoreCalculator.calculate(sleep(480, 85.0, 0, 0), (1..7).map { sleep() })
         val goodStages = SleepScoreCalculator.calculate(sleep(480, 85.0, 90, 100), (1..7).map { sleep() })
         assertTrue("Good stages should outscore zero stages", goodStages.score > noStages.score)
+    }
+
+    // ── Absent stages must renormalise, not penalise ─────────────────────────
+    //
+    // A source that writes a sleep session with no stage breakdown previously scored 0 on
+    // the 30%-weighted stage component, costing a flat 30 points on an unknown. These pin
+    // the corrected behaviour.
+
+    @Test
+    fun `a night with no stage detail is not penalised for the missing component`() {
+        val reported = SleepScoreCalculator.calculate(sleep(480), (1..7).map { sleep() })
+        val notReported = SleepScoreCalculator.calculate(sleepNoStages(480), (1..7).map { sleep() })
+        assertTrue(
+            "A night whose stages were never reported (${notReported.score}) must not score " +
+                "far below the same night with good stages (${reported.score})",
+            notReported.score > reported.score - 5f
+        )
+    }
+
+    @Test
+    fun `absent stages drop the component rather than scoring it zero`() {
+        val result = SleepScoreCalculator.calculate(sleepNoStages(480), (1..7).map { sleep() })
+        assertTrue(
+            "Sleep Stages must be absent from the breakdown, not present with score 0",
+            result.breakdown.none { it.name == "Sleep Stages" }
+        )
+        assertFalse(
+            "the stages weight must not be published when the component did not run",
+            result.weights.containsKey("stages")
+        )
+    }
+
+    @Test
+    fun `published weights always sum to one whether or not stages are present`() {
+        listOf(
+            SleepScoreCalculator.calculate(sleep(480), (1..7).map { sleep() }),
+            SleepScoreCalculator.calculate(sleepNoStages(480), (1..7).map { sleep() })
+        ).forEach { result ->
+            val sum = result.weights.values.sum()
+            assertTrue(
+                "effective weights must sum to 1.0 but summed to $sum for ${result.weights}",
+                kotlin.math.abs(sum - 1.0f) < 0.001f
+            )
+        }
+    }
+
+    @Test
+    fun `a stage-less night says so rather than reporting poor stages`() {
+        val result = SleepScoreCalculator.calculate(sleepNoStages(480), (1..7).map { sleep() })
+        assertTrue(
+            "the explanation must state that stage detail was not recorded: ${result.explanation}",
+            result.explanation.contains("Stage detail was not recorded")
+        )
     }
 }
 

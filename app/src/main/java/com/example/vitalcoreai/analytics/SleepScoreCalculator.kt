@@ -15,15 +15,40 @@ import com.example.vitalcoreai.data.model.SleepData
  * | Consistency         | 20%    | Bedtime variance over last 7 sessions         |
  * | Sleep debt          | 15%    | 7-day cumulative deficit vs personal need     |
  *
+ * ## Absent stages redistribute rather than score zero
+ * The stage component runs only when [SleepData.stagesAvailable] is true, and the
+ * remaining weights are renormalised over the components that did run:
+ *
+ * | Component   | Stages present | Stages absent |
+ * |-------------|----------------|---------------|
+ * | Duration    | 0.35           | 0.50          |
+ * | Stages      | 0.30           | dropped       |
+ * | Consistency | 0.20           | 0.29          |
+ * | Debt        | 0.15           | 0.21          |
+ *
+ * Previously the composite applied `W_STAGES` unconditionally. A source that writes a
+ * sleep session with no stage breakdown — routine for naps, manual entries, phone-only
+ * tracking, and any night whose stage detail syncs later than the session envelope —
+ * produced `deepMinutes = remMinutes = 0`, so [calculateStageScore] returned a literal
+ * `0.0f` and the night took a flat −30 penalty at unchanged confidence. Stage quality is
+ * *unknown* on such a night, not bad. This matches the efficiency handling in
+ * [RecoveryScoreCalculator], which had the same reasoning applied to it already.
+ *
+ * The dropped component is omitted from `breakdown` and from the published `weights` map
+ * rather than reported as a component that scored zero.
+ *
  * ## Confidence (A3)
- * Computed from [DataQualityEngine] based on history depth and today's data presence.
+ * Computed from [DataQualityEngine] under [DataQualityEngine.MetricProfile.SLEEP], so the
+ * score is judged on the data it actually consumes. Under the default RECOVERY profile it
+ * was being dragged down by resting-HR history, today's resting HR and intraday HR density
+ * — 45% of the confidence weight coming from signals the sleep score never reads.
  *
  * ## Root cause explanations (A6)
  * When [priorDaySleep] is supplied, the explanation includes specific deltas
  * (e.g., "Deep sleep ↓18 min", "Bedtime delayed 45 min").
  *
  * ## Limitations
- * - Stage data (deep/REM) requires a compatible wearable; absent on phone-only tracking.
+ * - Stage data (deep/REM) requires a source that writes it; handled by renormalisation above.
  * - Consistency score requires ≥ 3 sessions; defaults to 60 (moderate) below this.
  *
  * ## References
@@ -65,38 +90,63 @@ object SleepScoreCalculator {
             sleepHistoryDays = last7Days.size,
             hrHistoryDays = 0
         )
-        val quality = DataQualityEngine.evaluate(effectiveQualityInput)
+        val quality = DataQualityEngine.evaluate(effectiveQualityInput, DataQualityEngine.MetricProfile.SLEEP)
 
-        // ── Duration score (35%) ─────────────────────────────────────────────
+        // ── Which components can run at all ──────────────────────────────────
+        //
+        // Absent stages redistribute rather than score zero. [SleepData.stagesAvailable]
+        // is false whenever the source wrote a session envelope with no stage breakdown —
+        // routine for naps, manual entries, phone-only tracking, and any night where the
+        // stage detail syncs later than the session itself. Computing (deep+rem)/duration
+        // in that case yields a literal 0.0f, which the composite then applied at the full
+        // 30% weight: a flat −30 penalty on an unknown, at unchanged confidence.
+        //
+        // This mirrors the efficiency handling in [RecoveryScoreCalculator] — see its
+        // "Absent efficiency redistributes rather than substitutes" note. Stage quality is
+        // unknown on such a night, not bad, and the surviving components carry the score.
+        //
+        // Weights are renormalised over whichever components actually ran, so the composite
+        // stays on a 0–100 scale and every published contribution is truthful.
+        val hasStages = todaySleep.stagesAvailable
+        val survivingWeight = if (hasStages) 1f else 1f - W_STAGES
+        val wDuration    = W_DURATION / survivingWeight
+        val wStages      = if (hasStages) W_STAGES / survivingWeight else 0f
+        val wConsistency = W_CONSISTENCY / survivingWeight
+        val wDebt        = W_DEBT / survivingWeight
+
+        // ── Duration score ───────────────────────────────────────────────────
         val durationScore = durationScoreFor(todaySleep.durationMinutes, personalSleepNeedMinutes)
         val durationDelta = priorDaySleep?.let { buildDurationDelta(todaySleep, it) }
         val durationFactor = ScoreFactor(
             name = "Sleep Duration",
-            contribution = W_DURATION * 100f,
+            contribution = wDuration * 100f,
             rawValue = todaySleep.durationMinutes.toHoursMin(),
             score = durationScore,
             description = buildDurationDescription(todaySleep.durationMinutes, personalSleepNeedMinutes),
             delta = durationDelta
         )
 
-        // ── Stage quality (30%) ──────────────────────────────────────────────
-        val stageScore = calculateStageScore(todaySleep)
-        val stageDelta = priorDaySleep?.let { buildStageDelta(todaySleep, it) }
-        val stageFactor = ScoreFactor(
-            name = "Sleep Stages",
-            contribution = W_STAGES * 100f,
-            rawValue = buildStageRawValue(todaySleep),
-            score = stageScore,
-            description = buildStageDescription(todaySleep),
-            delta = stageDelta
-        )
+        // ── Stage quality ────────────────────────────────────────────────────
+        val stageScore = if (hasStages) calculateStageScore(todaySleep) else null
+        val stageDelta = if (hasStages) priorDaySleep?.let { buildStageDelta(todaySleep, it) } else null
+
+        val stageFactor = stageScore?.let {
+            ScoreFactor(
+                name = "Sleep Stages",
+                contribution = wStages * 100f,
+                rawValue = buildStageRawValue(todaySleep),
+                score = it,
+                description = buildStageDescription(todaySleep),
+                delta = stageDelta
+            )
+        }
 
         // ── Consistency (20%) ────────────────────────────────────────────────
         val allSessions = last7Days + listOf(todaySleep)
         val consistencyScore = calculateConsistencyScore(allSessions)
         val consistencyFactor = ScoreFactor(
             name = "Sleep Consistency",
-            contribution = W_CONSISTENCY * 100f,
+            contribution = wConsistency * 100f,
             rawValue = "Bedtime variance: ${calcBedtimeVariance(allSessions)}min",
             score = consistencyScore,
             description = buildConsistencyDescription(consistencyScore)
@@ -113,7 +163,7 @@ object SleepScoreCalculator {
         val debtScore = debtScoreFor(avgNightlyDeficit)
         val debtFactor = ScoreFactor(
             name = "Sleep Debt",
-            contribution = W_DEBT * 100f,
+            contribution = wDebt * 100f,
             rawValue = if (debtMinutes > 0)
                 "${debtMinutes / 60}h ${debtMinutes % 60}m over $nightsCounted nights"
             else "No sleep debt",
@@ -122,11 +172,17 @@ object SleepScoreCalculator {
         )
 
         // ── Composite ────────────────────────────────────────────────────────
-        val totalScore = (durationScore * W_DURATION + stageScore * W_STAGES +
-                consistencyScore * W_CONSISTENCY + debtScore * W_DEBT).coerceIn(0f, 100f)
+        // Renormalised weights, so a night without stage detail is scored on what the
+        // source actually reported rather than penalised for what it did not.
+        val totalScore = (durationScore * wDuration +
+                (stageScore ?: 0f) * wStages +
+                consistencyScore * wConsistency +
+                debtScore * wDebt).coerceIn(0f, 100f)
 
         // ── A6: Explanation ──────────────────────────────────────────────────
-        val explanation = buildExplanation(totalScore, durationDelta, stageDelta, debtMinutes, nightsCounted)
+        val explanation = buildExplanation(
+            totalScore, durationDelta, stageDelta, debtMinutes, nightsCounted, hasStages
+        )
 
         // ── Trend ────────────────────────────────────────────────────────────
         // last7Days is oldest-first by contract, so takeLast(3) really is the three most
@@ -149,7 +205,9 @@ object SleepScoreCalculator {
         }
 
         // ── Breakdown sorted highest-deviation first ──────────────────────────
-        val breakdown = listOf(durationFactor, stageFactor, consistencyFactor, debtFactor)
+        // listOfNotNull, so a dropped component is absent from the breakdown rather than
+        // rendering a fabricated 0 — the UI iterates this list directly.
+        val breakdown = listOfNotNull(durationFactor, stageFactor, consistencyFactor, debtFactor)
             .sortedByDescending { kotlin.math.abs(it.score - 50f) }
 
         return ScoreResult(
@@ -158,10 +216,15 @@ object SleepScoreCalculator {
             confidencePercent = quality.confidencePercent,
             explanation = explanation,
             breakdown = breakdown,
-            weights = mapOf(
-                "duration" to W_DURATION, "stages" to W_STAGES,
-                "consistency" to W_CONSISTENCY, "debt" to W_DEBT
-            ),
+            // The EFFECTIVE weights, not the nominal ones: when stages are absent the
+            // key is omitted entirely rather than published as a component worth 30%
+            // that scored zero.
+            weights = buildMap {
+                put("duration", wDuration)
+                if (hasStages) put("stages", wStages)
+                put("consistency", wConsistency)
+                put("debt", wDebt)
+            },
             trendDirection = trendDirection,
             coachTriggers = triggers,
             dataQuality = quality
@@ -307,13 +370,19 @@ object SleepScoreCalculator {
         durationDelta: String?,
         stageDelta: String?,
         debtMinutes: Int,
-        nights: Int
+        nights: Int,
+        hasStages: Boolean
     ): String {
         val drivers = listOfNotNull(durationDelta, stageDelta)
         val driversText = if (drivers.isNotEmpty()) " ${drivers.joinToString("; ")}." else ""
         val debtText = if (debtMinutes > 60 && nights > 0)
             " Sleep debt over the past $nights nights: ${debtMinutes / 60}h ${debtMinutes % 60}m." else ""
-        return "Sleep score: ${total.toInt()}/100.$driversText$debtText"
+        // Said plainly, as the Recovery engine does for absent efficiency: the score is
+        // built from fewer components, which is different from having scored badly on one.
+        val stagesText = if (!hasStages)
+            " Stage detail was not recorded for this night, so the score is based on " +
+                "duration, consistency and debt alone." else ""
+        return "Sleep score: ${total.toInt()}/100.$driversText$debtText$stagesText"
     }
 
     private fun Int.toHoursMin(): String = "${this / 60}h ${this % 60}m"
