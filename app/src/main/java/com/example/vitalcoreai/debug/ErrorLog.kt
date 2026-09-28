@@ -54,4 +54,7 @@ object ErrorLog {
  * return type, one line in [ErrorLog] when it does swallow something.
  */
 inline fun <T> loggingFailures(source: String, block: () -> T): Result<T> =
-    runCatching(block).onFailure { ErrorLog.record(source, it) }
+    runCatching(block).onFailure {
+        if (it is kotlinx.coroutines.CancellationException) throw it
+        ErrorLog.record(source, it)
+    }

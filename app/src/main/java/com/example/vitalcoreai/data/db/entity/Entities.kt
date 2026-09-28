@@ -73,7 +73,9 @@ data class DailyMetricsEntity(
      * different failures: a day can be fully populated and still be scored from data that
      * stopped arriving 30 hours ago because the watch has not synced.
      */
-    val newestRecordTimestampMs: Long? = null
+    val newestRecordTimestampMs: Long? = null,
+    /** Pipe-separated record types whose cached values could not be refreshed. */
+    val staleRecordTypes: String? = null
 )
 
 @Entity(tableName = "computed_scores")
@@ -182,6 +184,9 @@ data class ComputedScoresEntity(
     val recommendationIntensity: String? = null,
     val recommendationVolumePct: Int? = null,
     val recommendationDetail: String? = null,
+    val recommendationConfidence: String? = null,
+    val recommendationRationale: String? = null,
+    val recommendationAlternative: String? = null,
 
     /** Pipe-delimited "FACTOR=0.85" for the six data-quality dimensions. */
     val dataQualityFactors: String? = null,
@@ -289,7 +294,13 @@ data class AchievementEntity(
 data class SyncStateEntity(
     @PrimaryKey val recordType: String,   // e.g. "SleepSessionRecord"
     val lastSyncTimestampMs: Long,
-    val lastSuccessfulSyncMs: Long = lastSyncTimestampMs
+    val lastSuccessfulSyncMs: Long = lastSyncTimestampMs,
+    val outcome: String? = null,
+    val lastSuccessfulReadMs: Long? = null,
+    val latestMeasurementMs: Long? = null,
+    val sourcePackages: String? = null,
+    val recordCount: Int? = null,
+    val errorMessage: String? = null
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

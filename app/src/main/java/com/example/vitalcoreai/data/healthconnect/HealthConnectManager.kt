@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.aggregate.AggregationResult
 import androidx.health.connect.client.records.*
@@ -19,6 +20,12 @@ import java.time.*
 import javax.inject.Inject
 import javax.inject.Singleton
 import com.example.vitalcoreai.core.time.VitalTime
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.reflect.KClass
 
 /**
  * Health Connect access layer.
@@ -108,16 +115,16 @@ class HealthConnectManager @Inject constructor(
         val REQUIRED_PERMISSIONS = ALL_PERMISSIONS
     }
 
-    private val client: HealthConnectClient? by lazy {
-        try {
+    @Volatile private var cachedClient: HealthConnectClient? = null
+    private val client: HealthConnectClient?
+        get() = cachedClient ?: try {
             if (HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE) {
-                HealthConnectClient.getOrCreate(context)
+                HealthConnectClient.getOrCreate(context).also { cachedClient = it }
             } else null
         } catch (e: Exception) {
             Log.w(TAG, "Health Connect client unavailable", e)
             null
         }
-    }
 
     fun isAvailable(): Boolean =
         HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
@@ -141,12 +148,21 @@ class HealthConnectManager @Inject constructor(
 
     suspend fun grantedPermissions(): Set<String> {
         val c = client ?: return emptySet()
-        return try {
-            c.permissionController.getGrantedPermissions()
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not read granted permissions", e)
-            emptySet()
-        }
+        return c.permissionController.getGrantedPermissions()
+    }
+
+    /** Types whose stale historical fields can be repaired with the current grants. */
+    suspend fun readableRecordTypeNames(): Set<String> {
+        val granted = grantedPermissions()
+        return listOf(
+            HeartRateRecord::class, RestingHeartRateRecord::class, SleepSessionRecord::class,
+            StepsRecord::class, TotalCaloriesBurnedRecord::class, ActiveCaloriesBurnedRecord::class,
+            DistanceRecord::class, OxygenSaturationRecord::class, ExerciseSessionRecord::class,
+            WeightRecord::class, BodyFatRecord::class, FloorsClimbedRecord::class,
+            ElevationGainedRecord::class, HeartRateVariabilityRmssdRecord::class,
+            Vo2MaxRecord::class, SpeedRecord::class
+        ).filter { HealthPermission.getReadPermission(it) in granted }
+            .mapNotNull { it.simpleName }.toSet()
     }
 
     /** The real gate: can we compute anything at all? */
@@ -158,10 +174,58 @@ class HealthConnectManager @Inject constructor(
         grantedPermissions().containsAll(ALL_PERMISSIONS)
 
     suspend fun canReadInBackground(): Boolean =
-        HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in grantedPermissions()
+        supportsBackgroundRead() && HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND in grantedPermissions()
 
     suspend fun canReadHistory(): Boolean =
-        HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in grantedPermissions()
+        supportsHistoryRead() && HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY in grantedPermissions()
+
+    fun supportsBackgroundRead(): Boolean = client?.features?.getFeatureStatus(
+        HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND
+    ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+
+    fun supportsHistoryRead(): Boolean = client?.features?.getFeatureStatus(
+        HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY
+    ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+
+    fun availablePermissions(): Set<String> = CORE_PERMISSIONS + OPTIONAL_PERMISSIONS + buildSet {
+        if (supportsBackgroundRead()) add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+        if (supportsHistoryRead()) add(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+    }
+
+    /** Metadata is scoped to one coroutine/read, never a shared mutable sync buffer. */
+    private class ReadTrace(val type: KClass<out Record>) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<ReadTrace>
+        var count: Int? = null
+        var latestMs: Long? = null
+        val origins = mutableSetOf<String>()
+    }
+
+    suspend fun <R : Record, T> readOutcome(
+        type: KClass<R>,
+        block: suspend () -> T
+    ): HealthReadOutcome<T> {
+        val key = type.simpleName ?: type.toString()
+        val trace = ReadTrace(type)
+        return try {
+            if (!isAvailable() || client == null) return HealthReadOutcome(key, ReadOutcomeStatus.UNSUPPORTED)
+            if (HealthPermission.getReadPermission(type) !in grantedPermissions()) {
+                HealthReadOutcome(key, ReadOutcomeStatus.PERMISSION_DENIED)
+            } else {
+                val value = withContext(trace) { block() }
+                val empty = value == null || (value is Collection<*> && value.isEmpty())
+                HealthReadOutcome(
+                    recordType = key,
+                    status = if (empty) ReadOutcomeStatus.SUCCESS_EMPTY else ReadOutcomeStatus.SUCCESS_DATA,
+                    data = value,
+                    recordCount = trace.count,
+                    latestMeasurementMs = trace.latestMs,
+                    sourcePackages = trace.origins
+                )
+            }
+        } catch (error: Exception) {
+            HealthReadOutcome(key, readFailureStatus(error), errorMessage = error.javaClass.simpleName)
+        }
+    }
 
     /**
      * Per-metric availability for the Data Sources & Permissions screen:
@@ -246,9 +310,10 @@ class HealthConnectManager @Inject constructor(
      * IllegalStateException when Health Connect is updating. None of those should
      * take down a sync that has already gathered other data successfully.
      */
-    private inline fun <T> safeRead(fallback: T, block: () -> T): T = try {
+    private suspend inline fun <T> safeRead(fallback: T, block: () -> T): T = try {
         block()
     } catch (e: Exception) {
+        if (e is CancellationException || currentCoroutineContext()[ReadTrace] != null) throw e
         Log.w(TAG, "Health Connect read failed (returning fallback): ${e.javaClass.simpleName}: ${e.message}")
         fallback
     }
@@ -280,7 +345,7 @@ class HealthConnectManager @Inject constructor(
         type: kotlin.reflect.KClass<T>,
         range: TimeRangeFilter
     ): List<T> {
-        val c = client ?: return emptyList()
+        val c = client ?: throw UnsupportedOperationException("Health Connect unavailable")
         val out = mutableListOf<T>()
         var pageToken: String? = null
         var pages = 0
@@ -293,7 +358,34 @@ class HealthConnectManager @Inject constructor(
             pages++
         } while (pageToken != null && pages < MAX_PAGES)
         if (pageToken != null) {
-            Log.w(TAG, "Stopped paging ${type.simpleName} after $MAX_PAGES pages (${out.size} records)")
+            throw IllegalStateException("Incomplete paged read for ${type.simpleName}")
+        }
+        currentCoroutineContext()[ReadTrace]?.takeIf { it.type == type }?.let { trace ->
+            trace.count = out.size
+            trace.origins += out.map { it.metadata.dataOrigin.packageName }.filter { it.isNotBlank() }
+            trace.latestMs = out.mapNotNull { record ->
+                when (record) {
+                    // The SDK's common instantaneous/interval interfaces are internal.
+                    // Series use the last sample, not the enclosing record's end time.
+                    is HeartRateRecord -> record.samples.maxOfOrNull { it.time.toEpochMilli() }
+                    is SpeedRecord -> record.samples.maxOfOrNull { it.time.toEpochMilli() }
+                    is RestingHeartRateRecord -> record.time.toEpochMilli()
+                    is OxygenSaturationRecord -> record.time.toEpochMilli()
+                    is WeightRecord -> record.time.toEpochMilli()
+                    is BodyFatRecord -> record.time.toEpochMilli()
+                    is HeartRateVariabilityRmssdRecord -> record.time.toEpochMilli()
+                    is Vo2MaxRecord -> record.time.toEpochMilli()
+                    is SleepSessionRecord -> record.endTime.toEpochMilli()
+                    is ExerciseSessionRecord -> record.endTime.toEpochMilli()
+                    is StepsRecord -> record.endTime.toEpochMilli()
+                    is DistanceRecord -> record.endTime.toEpochMilli()
+                    is TotalCaloriesBurnedRecord -> record.endTime.toEpochMilli()
+                    is ActiveCaloriesBurnedRecord -> record.endTime.toEpochMilli()
+                    is FloorsClimbedRecord -> record.endTime.toEpochMilli()
+                    is ElevationGainedRecord -> record.endTime.toEpochMilli()
+                    else -> null
+                }
+            }.maxOrNull()
         }
         return out
     }
@@ -314,7 +406,14 @@ class HealthConnectManager @Inject constructor(
         range: TimeRangeFilter
     ): AggregationResult? = safeRead(null) {
         val c = client ?: return@safeRead null
-        c.aggregate(AggregateRequest(metrics = metrics, timeRangeFilter = range))
+        c.aggregate(AggregateRequest(metrics = metrics, timeRangeFilter = range)).also { result ->
+            currentCoroutineContext()[ReadTrace]?.let { trace ->
+                trace.origins.addAll(result.dataOrigins.map { it.packageName })
+                // Aggregation supplies deduplicated totals but no measurement timestamp.
+                // Read metadata in the same range without using raw records for totals.
+                readAll(trace.type, range)
+            }
+        }
     }
 
     // ─── Read APIs ─────────────────────────────────────────────────────────
@@ -758,17 +857,17 @@ class HealthConnectManager @Inject constructor(
                 val endMs = record.endTime.toEpochMilli()
                 val sessionRange = TimeRangeFilter.between(record.startTime, record.endTime)
 
-                val aggregated = aggregateOrNull(
-                    setOf(
-                        ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL,
-                        DistanceRecord.DISTANCE_TOTAL
-                    ),
-                    sessionRange
-                )
-                val sessionCalories = aggregated
+                // Optional enrichment cannot turn a valid workout read into a denied one.
+                val energy = readOutcome(ActiveCaloriesBurnedRecord::class) {
+                    aggregateOrNull(setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL), sessionRange)
+                }.data
+                val distance = readOutcome(DistanceRecord::class) {
+                    aggregateOrNull(setOf(DistanceRecord.DISTANCE_TOTAL), sessionRange)
+                }.data
+                val sessionCalories = energy
                     ?.get(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)
                     ?.inKilocalories?.toInt()?.takeIf { it > 0 }
-                val sessionDistance = aggregated
+                val sessionDistance = distance
                     ?.get(DistanceRecord.DISTANCE_TOTAL)
                     ?.inMeters?.toFloat()?.takeIf { it > 0f }
 
@@ -815,6 +914,30 @@ class HealthConnectManager @Inject constructor(
                 )
             }
         }
+
+    /** Independent reads: denying body fat must not hide otherwise readable weight. */
+    suspend fun readWeightOnlySeries(startDay: LocalDate, endDay: LocalDate): List<WeightData> =
+        safeRead(emptyList()) {
+            readAll(WeightRecord::class, dayRange(startDay, endDay)).sortedBy { it.time }.map {
+                WeightData(VitalTime.epochDayOf(it.time.toEpochMilli()), it.weight.inKilograms.toFloat(), null)
+            }
+        }
+
+    suspend fun readBodyFatForDay(day: LocalDate): Float? = safeRead(null) {
+        readAll(BodyFatRecord::class, dayRange(day.minusDays(90), day))
+            .maxByOrNull { it.time }?.percentage?.value?.toFloat()
+    }
+
+    suspend fun readVo2MaxForDay(day: LocalDate): Float? = safeRead(null) {
+        readAll(Vo2MaxRecord::class, dayRange(day, day))
+            .maxByOrNull { it.time }?.vo2MillilitersPerMinuteKilogram?.toFloat()
+    }
+
+    suspend fun readSpeedForDay(day: LocalDate): List<Double> = safeRead(emptyList()) {
+        readAll(SpeedRecord::class, dayRange(day, day)).flatMap { record ->
+            record.samples.map { it.speed.inMetersPerSecond }
+        }
+    }
 
     /**
      * Last-observation-carried-forward: the most recent measurement dated on or before

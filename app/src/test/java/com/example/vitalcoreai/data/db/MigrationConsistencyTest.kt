@@ -143,7 +143,7 @@ class MigrationConsistencyTest {
      */
     @Test
     fun `no added column is NOT NULL without a default`() {
-        val offenders = Migrations.MIGRATION_6_7_STATEMENTS.filter { sql ->
+        val offenders = (Migrations.MIGRATION_6_7_STATEMENTS + Migrations.MIGRATION_7_8_STATEMENTS).filter { sql ->
             sql.contains("ADD COLUMN") &&
                     sql.contains("NOT NULL", ignoreCase = true) &&
                     !sql.contains("DEFAULT", ignoreCase = true)
@@ -173,6 +173,24 @@ class MigrationConsistencyTest {
                 sorted[i - 1].endVersion, sorted[i].startVersion
             )
         }
-        assertEquals("the chain must end at the current schema version", 7, sorted.last().endVersion)
+        assertEquals("the chain must end at the current schema version", 8, sorted.last().endVersion)
+    }
+
+    @Test
+    fun `v8 migration exactly covers the exported schema changes`() {
+        val previousFile = requireNotNull(schemaFile) { "The checked-in v7 schema is required" }
+        val currentFile = File(previousFile.parentFile, "8.json")
+        assertTrue("The checked-in v8 schema is required", currentFile.exists())
+        val previous = previousFile.readText()
+        val current = currentFile.readText()
+        val tables = Regex("\\\"tableName\\\":\\s*\\\"([^\\\"]+)\\\"")
+            .findAll(current).map { it.groupValues[1] }.toSet()
+        val addedInSchema = tables.flatMap { table ->
+            (columnsOf(current, table) - columnsOf(previous, table)).map { table to it }
+        }.toSet()
+        assertEquals(addedInSchema, addedColumns(Migrations.MIGRATION_7_8_STATEMENTS).toSet())
+        tables.forEach { table ->
+            assertTrue("v8 must preserve every existing $table column", columnsOf(current, table).containsAll(columnsOf(previous, table)))
+        }
     }
 }

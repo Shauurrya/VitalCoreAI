@@ -81,7 +81,7 @@ import com.example.vitalcoreai.data.db.entity.*
         MuscleRecoveryEntity::class,     // Part 9
         WorkoutExerciseEntity::class     // Part 9 — per-exercise tracking
     ],
-    version = 7,
+    version = 8,
     // Exported so MigrationTestHelper can verify each migration against the real schema
     // rather than against the entities the same build just generated.
     exportSchema = true

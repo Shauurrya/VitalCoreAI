@@ -8,8 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,151 +28,175 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.vitalcoreai.analytics.Confidence
+import com.example.vitalcoreai.theme.OnBackground
 import com.example.vitalcoreai.theme.OnSurfaceDim
 import com.example.vitalcoreai.theme.OnSurfaceMuted
 import com.example.vitalcoreai.theme.RecoveryAccent
 import com.example.vitalcoreai.theme.SleepAccent
-import com.example.vitalcoreai.theme.Spacing
 import com.example.vitalcoreai.theme.StrainAccent
 import com.example.vitalcoreai.theme.SurfaceL2
 import com.example.vitalcoreai.theme.VitalCoreType
+import com.example.vitalcoreai.theme.VitalShapes
 import com.example.vitalcoreai.theme.recoveryTierColor
-import com.example.vitalcoreai.theme.recoveryTierGradient
 import com.example.vitalcoreai.theme.recoveryTierLabel
 import com.example.vitalcoreai.theme.strainTierColor
 import com.example.vitalcoreai.theme.strainZoneLabel
-import com.example.vitalcoreai.ui.accessibility.AccessibilityUtils
 import kotlin.math.cos
-import kotlin.math.floor
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RING SYSTEM
-//
-// Two ring shapes, deliberately different, so the user never has to read the
-// number to know which kind of metric they are looking at:
-//
-//   PercentRing  continuous 360° sweep · "%"   · 0 decimals · one tier gradient
-//   StrainRing   21 discrete segments  · "/21" · 1 decimal  · per-segment heat ramp
-//
-// No springs. spring(dampingRatio = 0.85f) overshoots, drawing an arc past 100%
-// or past 21.0 for ~120 ms — visibly wrong on a bounded gauge, and non-
-// deterministic under screenshot test.
-// ═══════════════════════════════════════════════════════════════════════════
-
 object RingMotion {
-    /** Expo-out. Fast commit, long settle — reads as "landing on" a value. */
-    val Easing = CubicBezierEasing(0.16f, 1.00f, 0.30f, 1.00f)
+    val Easing = CubicBezierEasing(0.16f, 1f, 0.30f, 1f)
     const val HeroDurationMs = 900
     const val CompactDurationMs = 450
 }
 
 object RingDefaults {
-    val HeroSize = 200.dp;    val HeroStroke = 16.dp      // dedicated screen hero
-    val LargeSize = 152.dp;   val LargeStroke = 13.dp     // report cards
-    val MediumSize = 108.dp;  val MediumStroke = 10.dp    // Overview 3-up row
-    val CompactSize = 44.dp;  val CompactStroke = 4.dp    // list rows, More hub
-
+    val HeroSize = 200.dp
+    val HeroStroke = 10.dp
+    val LargeSize = 152.dp
+    val LargeStroke = 8.dp
+    val MediumSize = 108.dp
+    val MediumStroke = 6.dp
+    val CompactSize = 44.dp
+    val CompactStroke = 3.dp
     val TrackColor = SurfaceL2
-    const val GlowStrokeMultiplier = 2.4f
-    const val GlowAlpha = 0.20f
+    const val GlowStrokeMultiplier = 1.6f
+    const val GlowAlpha = 0.06f
     const val StrainSegments = 21
-    const val StrainGapDegrees = 2.0f
+    const val StrainGapDegrees = 2f
 }
 
-/** Numeral style is chosen from the ring diameter — callers never pass a style. */
-private fun ringNumeralStyle(size: Dp): TextStyle = when {
-    size >= 180.dp -> VitalCoreType.metricHero
-    size >= 130.dp -> VitalCoreType.metricLarge
-    size >= 88.dp  -> VitalCoreType.metricMedium
-    else           -> VitalCoreType.metricSmall
-}
+private const val DialStart = 126f
+private const val DialSweep = 288f
 
-/** How far above the baseline the unit glyph sits, scaled to the numeral. */
-private fun unitBaselineInset(size: Dp): Dp = when {
-    size >= 180.dp -> 12.dp
-    size >= 130.dp -> 8.dp
-    size >= 88.dp  -> 5.dp
-    else           -> 3.dp
-}
+private fun Float?.bounded(max: Float): Float? =
+    this?.takeIf { it.isFinite() }?.coerceIn(0f, max)
 
-/**
- * Bounding box for a stroked ring arc.
- *
- * `drawArc` centres the stroke on its bounding box, so drawing into the full canvas
- * clips half the stroke against all four edges — the ring then reads as a flattened
- * capsule rather than a circle. Inset by the widest stroke that will be drawn (the
- * glow, where there is one) and keep the box square so it stays circular even if the
- * canvas is not.
- */
-private fun DrawScope.ringArcBox(widestStrokePx: Float): Pair<Offset, Size> {
-    val diameter = (kotlin.math.min(size.width, size.height) - widestStrokePx)
-        .coerceAtLeast(0f)
-    val topLeft = Offset(
-        x = (size.width - diameter) / 2f,
-        y = (size.height - diameter) / 2f
-    )
-    return topLeft to Size(diameter, diameter)
-}
-
-private fun ringDurationMs(size: Dp): Int =
-    if (size >= RingDefaults.MediumSize) RingMotion.HeroDurationMs else RingMotion.CompactDurationMs
-
-/** Ring-local click wiring. Semantics are cleared and re-declared so TalkBack
- *  reads one sentence instead of four disconnected fragments. */
-private fun Modifier.ringSemantics(
-    description: String,
-    onClick: (() -> Unit)?,
-): Modifier = clearAndSetSemantics {
-    this.contentDescription = description
-    if (onClick != null) {
-        this.role = Role.Button
-        this.onClick { onClick(); true }
+@Composable
+private fun ringProgress(target: Float, animate: Boolean, duration: Int): Float {
+    val progress = remember { Animatable(if (animate) 0f else target) }
+    LaunchedEffect(target, animate) {
+        if (animate) progress.animateTo(target, tween(duration, easing = RingMotion.Easing))
+        else progress.snapTo(target)
     }
+    return progress.value
 }
+
+private fun Modifier.ringSemantics(description: String, onClick: (() -> Unit)?): Modifier =
+    clearAndSetSemantics {
+        contentDescription = description
+        if (onClick != null) {
+            role = Role.Button
+            this.onClick { onClick(); true }
+        }
+    }
 
 @Composable
 private fun Modifier.ringClickable(onClick: (() -> Unit)?, accent: Color): Modifier =
-    if (onClick == null) this else this
-        .clip(CircleShape)
-        .clickable(
-            interactionSource = remember { MutableInteractionSource() },
-            indication = ripple(color = accent),
-            onClick = onClick
+    if (onClick == null) this else clip(CircleShape).clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = ripple(color = accent),
+        onClick = onClick
+    )
+
+/** One calibrated, open dial shared by the overview and metric detail screens. */
+@Composable
+private fun PerformanceDial(
+    fraction: Float,
+    accent: Color,
+    strokeWidth: Dp,
+    modifier: Modifier = Modifier,
+    showGlow: Boolean = false,
+    targetFractions: List<Float> = emptyList(),
+) {
+    Canvas(modifier) {
+        val sw = strokeWidth.toPx()
+        // Reserve room for target markers and round caps on all four sides.
+        val diameter = (min(size.width, size.height) - sw - 12.dp.toPx()).coerceAtLeast(0f)
+        val radius = diameter / 2f
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val topLeft = center - Offset(radius, radius)
+        val arcSize = Size(diameter, diameter)
+        val stroke = Stroke(width = sw, cap = StrokeCap.Round)
+        val progressSweep = DialSweep * fraction.coerceIn(0f, 1f)
+
+        drawArc(
+            color = RingDefaults.TrackColor,
+            startAngle = DialStart, sweepAngle = DialSweep, useCenter = false,
+            topLeft = topLeft, size = arcSize, style = stroke
         )
 
-// ───────────────────────────────────────────────────────────────────────────
-// PercentRing
-// ───────────────────────────────────────────────────────────────────────────
+        // Fine inner indices lend the dial a quiet instrument-like rhythm.
+        val tickOuter = radius - sw / 2f - 5.dp.toPx()
+        if (tickOuter > 16.dp.toPx()) {
+            for (tick in 0..24) {
+                val angle = DialStart + DialSweep * tick / 24f
+                val tickLength = if (tick % 6 == 0) 3.dp.toPx() else 1.5.dp.toPx()
+                drawLine(
+                    color = OnSurfaceMuted.copy(alpha = if (tick % 6 == 0) 0.48f else 0.25f),
+                    start = pointOnDial(center, tickOuter - tickLength, angle),
+                    end = pointOnDial(center, tickOuter, angle),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+        }
 
-/**
- * Continuous 0–100 ring. Recovery, Sleep, Readiness, Stress, Activity, report scores.
- *
- * @param value          0–100. null renders an em-dash, a fully unlit track and caption "No data".
- * @param label          eyebrow under the number, e.g. "RECOVERY". Uppercased by the composable.
- * @param accent         domain colour; used for the glow when [useTierColors] is false.
- * @param useTierColors  true → arc + number use recoveryTierGradient(value);
- *                       false → arc + number use [accent]. Stress passes false and
- *                       supplies invertedTierColor() itself via [accent].
- * @param caption        small line under the label. null → recoveryTierLabel(value).
- *                       Pass "" to suppress it entirely.
- */
+        if (progressSweep > 0.1f) {
+            if (showGlow) {
+                drawArc(
+                    color = accent.copy(alpha = RingDefaults.GlowAlpha),
+                    startAngle = DialStart, sweepAngle = progressSweep, useCenter = false,
+                    topLeft = topLeft, size = arcSize,
+                    style = Stroke(sw * RingDefaults.GlowStrokeMultiplier, cap = StrokeCap.Round)
+                )
+            }
+            drawArc(
+                color = accent,
+                startAngle = DialStart, sweepAngle = progressSweep, useCenter = false,
+                topLeft = topLeft, size = arcSize, style = stroke
+            )
+        }
+
+        targetFractions.forEach { target ->
+            val angle = DialStart + DialSweep * target.coerceIn(0f, 1f)
+            drawLine(
+                color = OnBackground.copy(alpha = 0.9f),
+                start = pointOnDial(center, radius - sw / 2f - 2.dp.toPx(), angle),
+                end = pointOnDial(center, radius + sw / 2f + 3.dp.toPx(), angle),
+                strokeWidth = 1.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+private fun pointOnDial(center: Offset, radius: Float, angle: Float): Offset {
+    val radians = Math.toRadians(angle.toDouble())
+    return Offset(
+        center.x + (radius * cos(radians)).toFloat(),
+        center.y + (radius * sin(radians)).toFloat()
+    )
+}
+
+/** A percentage dial. Missing or invalid samples remain visibly unavailable. */
 @Composable
 fun PercentRing(
     value: Float?,
@@ -189,111 +213,32 @@ fun PercentRing(
     contentDescription: String? = null,
     onClick: (() -> Unit)? = null,
 ) {
-    val target = value?.coerceIn(0f, 100f) ?: 0f
-    val progress = remember { Animatable(if (animate) 0f else target) }
-    LaunchedEffect(target, animate) {
-        if (animate) {
-            progress.animateTo(target, tween(ringDurationMs(size), easing = RingMotion.Easing))
-        } else {
-            progress.snapTo(target)
-        }
-    }
+    val score = value.bounded(100f)
+    val progress = ringProgress(score ?: 0f, animate, RingMotion.HeroDurationMs)
+    val ringColor = if (useTierColors) recoveryTierColor(score) else accent
+    val resolvedCaption = caption ?: if (score == null) "No data" else recoveryTierLabel(score)
+    val description = contentDescription ?: if (score == null) "$label, no data recorded yet"
+        else "$label ${score.roundToInt()} percent, $resolvedCaption"
 
-    val tier = recoveryTierGradient(target)
-    val arcStart = if (useTierColors) tier.first.copy(alpha = 0.80f) else accent.copy(alpha = 0.80f)
-    val arcEnd = if (useTierColors) tier.second else accent
-    val numberColor = when {
-        value == null -> OnSurfaceMuted
-        useTierColors -> recoveryTierColor(value)
-        else          -> accent
-    }
-    val glowColor = (if (useTierColors) recoveryTierColor(target) else accent)
-        .copy(alpha = RingDefaults.GlowAlpha)
-
-    val resolvedCaption = caption ?: if (value == null) "No data" else recoveryTierLabel(value)
-    val description = contentDescription ?: percentRingDescription(label, value)
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .ringClickable(onClick, accent)
+    BoxWithConstraints(
+        modifier = modifier.size(size).ringClickable(onClick, ringColor)
             .ringSemantics(description, onClick),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val sw = strokeWidth.toPx()
-            val stroke = Stroke(width = sw, cap = StrokeCap.Round)
-            val sweep = 360f * (progress.value / 100f)
-
-            val widestStroke = if (showGlow) sw * RingDefaults.GlowStrokeMultiplier else sw
-            val (arcTopLeft, arcSize) = ringArcBox(widestStroke)
-
-            drawArc(
-                color = RingDefaults.TrackColor,
-                startAngle = -90f, sweepAngle = 360f, useCenter = false, style = stroke,
-                topLeft = arcTopLeft, size = arcSize
-            )
-
-            if (sweep > 0.5f) {
-                if (showGlow) {
-                    drawArc(
-                        color = glowColor,
-                        startAngle = -90f, sweepAngle = sweep, useCenter = false,
-                        style = Stroke(
-                            width = sw * RingDefaults.GlowStrokeMultiplier,
-                            cap = StrokeCap.Round
-                        ),
-                        topLeft = arcTopLeft, size = arcSize
-                    )
-                }
-                drawArc(
-                    brush = Brush.sweepGradient(
-                        0.0f to arcStart,
-                        0.5f to arcEnd,
-                        1.0f to arcEnd
-                    ),
-                    startAngle = -90f, sweepAngle = sweep, useCenter = false, style = stroke,
-                    topLeft = arcTopLeft, size = arcSize
-                )
-            }
-        }
-
+        PerformanceDial(progress / 100f, ringColor, strokeWidth, Modifier.fillMaxSize(), showGlow)
         RingCenter(
-            valueText = value?.let { progress.value.roundToInt().toString() } ?: "—",
-            valueColor = numberColor,
-            unit = if (showUnit && value != null) "%" else null,
-            size = size,
+            valueText = if (score == null) "—" else progress.roundToInt().toString(),
+            unit = if (showUnit && score != null) "%" else null,
+            size = minOf(size, maxWidth, maxHeight),
             label = label,
             caption = resolvedCaption,
+            available = score != null,
+            accent = ringColor
         )
     }
 }
 
-private fun percentRingDescription(label: String, value: Float?): String =
-    if (value == null) {
-        AccessibilityUtils.insufficientDataDescription(label, listOf("No data recorded yet"))
-    } else {
-        "$label ${value.roundToInt()} out of 100, ${recoveryTierLabel(value)}"
-    }
-
-// ───────────────────────────────────────────────────────────────────────────
-// StrainRing
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Segmented 0–21 Borg-style strain ring.
- *
- * Segment i is lit when i < floor(strain); the segment at index floor(strain) is
- * drawn at sweep × frac(strain) so it grows rather than fades. Lit segment i uses
- * strainTierColor(i + 0.5f) — the ring itself is a heat ramp, so a hard day looks
- * hot before a single digit is read.
- *
- * @param strain          0–21. null renders "—" with every segment unlit — a charging
- *                        watch must never read as a rest day.
- * @param targetLow       optimal band lower bound — a radial tick outside the stroke.
- * @param targetHigh      optimal band upper bound.
- * @param isProxyEstimate true → number at 0.75 alpha and caption suffix " · estimated".
- */
+/** Strain always uses the native 0–21 scale, including its optional target band. */
 @Composable
 fun StrainRing(
     strain: Float?,
@@ -310,201 +255,101 @@ fun StrainRing(
     contentDescription: String? = null,
     onClick: (() -> Unit)? = null,
 ) {
-    val maxStrain = RingDefaults.StrainSegments.toFloat()
-    val target = strain?.coerceIn(0f, maxStrain) ?: 0f
-    val progress = remember { Animatable(if (animate) 0f else target) }
-    LaunchedEffect(target, animate) {
-        if (animate) {
-            progress.animateTo(target, tween(ringDurationMs(size), easing = RingMotion.Easing))
-        } else {
-            progress.snapTo(target)
-        }
-    }
+    val score = strain.bounded(21f)
+    val progress = ringProgress(score ?: 0f, animate, RingMotion.HeroDurationMs)
+    val baseCaption = caption ?: if (score == null) "No data" else strainZoneLabel(score)
+    val resolvedCaption = if (isProxyEstimate && score != null) "$baseCaption · estimated" else baseCaption
+    val description = contentDescription ?: strainDescription(label, score, isProxyEstimate)
 
-    val numberColor = strainTierColor(strain)
-        .copy(alpha = if (isProxyEstimate) 0.75f else 1f)
-    val baseCaption = caption ?: if (strain == null) "No data" else strainZoneLabel(strain)
-    val resolvedCaption = if (isProxyEstimate) "$baseCaption · estimated" else baseCaption
-    val description = contentDescription ?: strainRingDescription(label, strain, isProxyEstimate)
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .ringClickable(onClick, StrainAccent)
+    BoxWithConstraints(
+        modifier = modifier.size(size).ringClickable(onClick, StrainAccent)
             .ringSemantics(description, onClick),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val sw = strokeWidth.toPx()
-            val segStroke = Stroke(width = sw, cap = StrokeCap.Butt)
-            val segTotal = 360f / RingDefaults.StrainSegments
-            val gap = RingDefaults.StrainGapDegrees
-            val lit = progress.value
-            val fullSegments = floor(lit).toInt()
-            val partial = lit - fullSegments
-
-            // Sized for the 2.2× glow stroke so every arc shares one square, un-clipped box.
-            val (arcTopLeft, arcSize) = ringArcBox(sw * 2.2f)
-
-            // Glow under the lit range — one continuous arc, not per segment.
-            if (lit > 0.05f) {
-                drawArc(
-                    color = strainTierColor(lit).copy(alpha = 0.18f),
-                    startAngle = -90f,
-                    sweepAngle = 360f * lit / maxStrain,
-                    useCenter = false,
-                    style = Stroke(width = sw * 2.2f, cap = StrokeCap.Round),
-                    topLeft = arcTopLeft, size = arcSize
-                )
-            }
-
-            for (i in 0 until RingDefaults.StrainSegments) {
-                val start = -90f + i * segTotal + gap / 2f
-                val fullSweep = segTotal - gap
-
-                drawArc(
-                    color = RingDefaults.TrackColor,
-                    startAngle = start, sweepAngle = fullSweep,
-                    useCenter = false, style = segStroke,
-                    topLeft = arcTopLeft, size = arcSize
-                )
-
-                val fraction = when {
-                    i < fullSegments -> 1f
-                    i == fullSegments -> partial
-                    else -> 0f
-                }
-                if (fraction > 0.001f) {
-                    drawArc(
-                        color = strainTierColor(i + 0.5f),
-                        startAngle = start, sweepAngle = fullSweep * fraction,
-                        useCenter = false, style = segStroke,
-                        topLeft = arcTopLeft, size = arcSize
-                    )
-                }
-            }
-
-            // Optimal-band ticks, radial, just outside the stroke.
-            val tickRadius = kotlin.math.min(this.size.width, this.size.height) / 2f - sw / 2f
-            listOfNotNull(targetLow, targetHigh).forEach { t ->
-                val angleDeg = -90.0 + 360.0 * (t.coerceIn(0f, maxStrain) / maxStrain)
-                val rad = Math.toRadians(angleDeg)
-                val inner = tickRadius + sw / 2f + 3.dp.toPx()
-                val outer = inner + 6.dp.toPx()
-                val cx = this.size.width / 2f
-                val cy = this.size.height / 2f
-                drawLine(
-                    color = OnSurfaceDim,
-                    start = Offset(cx + (inner * cos(rad)).toFloat(), cy + (inner * sin(rad)).toFloat()),
-                    end = Offset(cx + (outer * cos(rad)).toFloat(), cy + (outer * sin(rad)).toFloat()),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
-        }
-
+        PerformanceDial(
+            fraction = progress / 21f,
+            accent = StrainAccent,
+            strokeWidth = strokeWidth,
+            modifier = Modifier.fillMaxSize(),
+            targetFractions = listOfNotNull(targetLow.bounded(21f), targetHigh.bounded(21f)).map { it / 21f }
+        )
         RingCenter(
-            valueText = strain?.let { fmtStrain(progress.value) } ?: "—",
-            valueColor = numberColor,
-            unit = if (strain != null) "/21" else null,
-            size = size,
+            valueText = if (score == null) "—" else fmtStrain(progress),
+            unit = if (score != null) "/ 21" else null,
+            size = minOf(size, maxWidth, maxHeight),
             label = label,
             caption = resolvedCaption,
-            footnote = exertionMinutes?.let { "${it.roundToInt()} exertion-min" },
+            available = score != null,
+            accent = StrainAccent,
+            footnote = exertionMinutes?.takeIf { it.isFinite() }?.let { "${it.roundToInt()} exertion-min" }
         )
     }
 }
 
-private fun fmtStrain(v: Float): String {
-    val scaled = (v * 10f).roundToInt()
+private fun fmtStrain(value: Float): String {
+    val scaled = (value * 10f).roundToInt()
     return "${scaled / 10}.${scaled % 10}"
 }
 
-private fun strainRingDescription(label: String, strain: Float?, isProxy: Boolean): String =
-    if (strain == null) {
-        AccessibilityUtils.insufficientDataDescription(label, listOf("No data recorded yet"))
-    } else {
-        buildString {
-            append("$label ${fmtStrain(strain)} out of 21, ${strainZoneLabel(strain)}")
-            if (isProxy) append(", estimated from steps and exercise minutes")
-        }
+private fun strainDescription(label: String, value: Float?, isProxy: Boolean): String =
+    if (value == null) "$label, no data recorded yet" else buildString {
+        append("$label ${fmtStrain(value)} out of 21, ${strainZoneLabel(value)}")
+        if (isProxy) append(", estimated from steps and exercise minutes")
     }
-
-// ───────────────────────────────────────────────────────────────────────────
-// Shared centre column
-// ───────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun RingCenter(
     valueText: String,
-    valueColor: Color,
     unit: String?,
     size: Dp,
     label: String,
     caption: String?,
+    available: Boolean,
+    accent: Color,
     footnote: String? = null,
 ) {
-    val numeralStyle = ringNumeralStyle(size)
-    val compact = size < RingDefaults.MediumSize
-
+    val compact = size < 108.dp
+    val numeralSize = (size.value * 0.28f).coerceIn(18f, 58f)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.padding(horizontal = size * 0.14f)
     ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(text = valueText, style = numeralStyle, color = valueColor, maxLines = 1)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = valueText,
+                style = VitalCoreType.metricHero.copy(fontSize = numeralSize.sp, lineHeight = (numeralSize + 2).sp),
+                color = if (available) OnBackground else OnSurfaceMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             if (unit != null && !compact) {
                 Text(
                     text = unit,
                     style = VitalCoreType.metricUnit,
-                    color = OnSurfaceMuted,
-                    modifier = Modifier.padding(start = 2.dp, bottom = unitBaselineInset(size))
+                    color = OnSurfaceDim,
+                    modifier = Modifier.padding(start = 3.dp, top = numeralSize.dp * 0.2f)
                 )
             }
         }
         if (label.isNotBlank() && !compact) {
-            Spacer(Modifier.height(Spacing.xxs))
-            Text(
-                text = label.uppercase(),
-                style = VitalCoreType.eyebrow,
-                color = OnSurfaceDim,
-                maxLines = 1
-            )
+            Spacer(Modifier.height(4.dp))
+            Text(label.uppercase(), style = VitalCoreType.eyebrow, color = OnSurfaceDim,
+                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         if (!caption.isNullOrBlank() && !compact) {
-            Text(
-                text = caption,
-                style = VitalCoreType.monoTiny,
-                color = OnSurfaceMuted,
-                textAlign = TextAlign.Center,
-                maxLines = 1
-            )
+            Spacer(Modifier.height(4.dp))
+            Text(caption, style = VitalCoreType.monoTiny, color = if (available) accent else OnSurfaceMuted,
+                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         if (footnote != null && size >= RingDefaults.LargeSize) {
-            Text(
-                text = footnote,
-                style = VitalCoreType.monoTiny,
-                color = OnSurfaceMuted,
-                textAlign = TextAlign.Center,
-                maxLines = 1
-            )
+            Spacer(Modifier.height(4.dp))
+            Text(footnote, style = VitalCoreType.monoTiny, color = OnSurfaceMuted,
+                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// CompactRing
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Flat single-colour ring for list rows and dense summary cards.
- * No gradient, no glow — these appear 10+ per screen and must not allocate brushes.
- *
- * @param max      100f for percentage metrics, 21f for strain.
- * @param decimals 0 for percentages, 1 for strain.
- * @param color    null → recoveryTierColor(value) when max == 100f,
- *                        strainTierColor(value)  when max == 21f.
- */
+/** Compact full-circle version for rows, where calibration marks would add noise. */
 @Composable
 fun CompactRing(
     value: Float?,
@@ -518,69 +363,37 @@ fun CompactRing(
     animate: Boolean = true,
     contentDescription: String? = null,
 ) {
-    val target = value?.coerceIn(0f, max) ?: 0f
-    val progress = remember { Animatable(if (animate) 0f else target) }
-    LaunchedEffect(target, animate) {
-        if (animate) {
-            progress.animateTo(target, tween(RingMotion.CompactDurationMs, easing = RingMotion.Easing))
-        } else {
-            progress.snapTo(target)
-        }
-    }
-
-    val resolved = color ?: if (max <= 21.5f) strainTierColor(value) else recoveryTierColor(value)
-    val text = when {
-        value == null -> "—"
-        decimals >= 1 -> fmtStrain(progress.value)
-        else          -> progress.value.roundToInt().toString()
-    }
-    val description = contentDescription
-        ?: if (value == null) "No data" else "${text.trimEnd()} of ${max.roundToInt()}"
+    val ceiling = max.takeIf { it.isFinite() && it > 0f } ?: 100f
+    val score = value.bounded(ceiling)
+    val progress = ringProgress(score ?: 0f, animate, RingMotion.CompactDurationMs)
+    val resolved = color ?: if (ceiling <= 21.5f) strainTierColor(score) else recoveryTierColor(score)
+    val text = if (score == null) "—" else if (decimals >= 1) fmtStrain(progress) else progress.roundToInt().toString()
+    val description = contentDescription ?: if (score == null) "No data"
+        else "${if (decimals >= 1) fmtStrain(score) else score.roundToInt()} of ${ceiling.roundToInt()}"
 
     Box(
-        modifier = modifier
-            .size(size)
-            .clearAndSetSemantics { this.contentDescription = description },
+        modifier = modifier.size(size).ringSemantics(description, null),
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val sw = strokeWidth.toPx()
-            val stroke = Stroke(width = sw, cap = StrokeCap.Round)
-            val (arcTopLeft, arcSize) = ringArcBox(sw)
-            drawArc(
-                color = RingDefaults.TrackColor,
-                startAngle = -90f, sweepAngle = 360f, useCenter = false, style = stroke,
-                topLeft = arcTopLeft, size = arcSize
-            )
-            val sweep = 360f * (progress.value / max).coerceIn(0f, 1f)
-            if (sweep > 0.5f) {
-                drawArc(
-                    color = resolved,
-                    startAngle = -90f, sweepAngle = sweep, useCenter = false, style = stroke,
-                    topLeft = arcTopLeft, size = arcSize
-                )
+            val diameter = (min(this.size.width, this.size.height) - sw).coerceAtLeast(0f)
+            val topLeft = Offset((this.size.width - diameter) / 2f, (this.size.height - diameter) / 2f)
+            val arcSize = Size(diameter, diameter)
+            val stroke = Stroke(sw, cap = StrokeCap.Round)
+            drawArc(RingDefaults.TrackColor, -90f, 360f, false, topLeft, arcSize, style = stroke)
+            if (progress > 0f) {
+                drawArc(resolved, -90f, 360f * progress / ceiling, false, topLeft, arcSize, style = stroke)
             }
         }
         if (showValue) {
-            Text(
-                text = text,
-                style = VitalCoreType.metricSmall,
-                color = if (value == null) OnSurfaceMuted else resolved,
-                maxLines = 1
-            )
+            Text(text, style = VitalCoreType.metricSmall,
+                color = if (score == null) OnSurfaceMuted else OnBackground, maxLines = 1)
         }
     }
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// HeroRingRow — Overview's 3-up anchor
-// ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Overview's 3-up hero row: Recovery · Strain · Sleep, each in its own domain-
- * accented card. A confidence badge appears under a ring only when that score is
- * not HIGH confidence — a badge on every ring would be noise.
- */
+/** The overview's primary visual: three equally weighted, responsive performance dials. */
 @Composable
 fun HeroRingRow(
     recovery: Float?,
@@ -594,78 +407,105 @@ fun HeroRingRow(
     strainConfidence: Confidence = Confidence.HIGH,
     sleepConfidence: Confidence = Confidence.HIGH,
 ) {
-    val cardPadding = PaddingValues(horizontal = Spacing.xs, vertical = Spacing.md)
-
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-    ) {
-        VitalCard(
-            modifier = Modifier.weight(1f),
-            accent = RecoveryAccent,
-            shape = com.example.vitalcoreai.theme.VitalShapes.RingCard,
-            contentPadding = cardPadding,
-            onClick = onRecoveryClick
-        ) {
-            HeroRingCell(confidence = recoveryConfidence) {
-                PercentRing(
-                    value = recovery,
-                    label = "Recovery",
-                    size = RingDefaults.MediumSize,
-                    strokeWidth = RingDefaults.MediumStroke,
-                    accent = RecoveryAccent,
-                    caption = "",
-                )
-            }
-        }
-        VitalCard(
-            modifier = Modifier.weight(1f),
-            accent = StrainAccent,
-            shape = com.example.vitalcoreai.theme.VitalShapes.RingCard,
-            contentPadding = cardPadding,
-            onClick = onStrainClick
-        ) {
-            HeroRingCell(confidence = strainConfidence) {
-                StrainRing(
-                    strain = strain,
-                    size = RingDefaults.MediumSize,
-                    strokeWidth = RingDefaults.MediumStroke,
-                    label = "Strain",
-                    caption = "",
-                )
-            }
-        }
-        VitalCard(
-            modifier = Modifier.weight(1f),
-            accent = SleepAccent,
-            shape = com.example.vitalcoreai.theme.VitalShapes.RingCard,
-            contentPadding = cardPadding,
-            onClick = onSleepClick
-        ) {
-            HeroRingCell(confidence = sleepConfidence) {
-                PercentRing(
-                    value = sleep,
-                    label = "Sleep",
-                    size = RingDefaults.MediumSize,
-                    strokeWidth = RingDefaults.MediumStroke,
-                    accent = SleepAccent,
-                    caption = "",
-                )
-            }
-        }
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        HeroRingCell(
+            value = sleep.bounded(100f), max = 100f, label = "SLEEP", accent = SleepAccent,
+            status = "Performance", confidence = sleepConfidence,
+            onClick = onSleepClick, modifier = Modifier.weight(1f)
+        )
+        HeroRingCell(
+            value = recovery.bounded(100f), max = 100f, label = "RECOVERY", accent = recoveryTierColor(recovery),
+            status = recoveryTierLabel(recovery), confidence = recoveryConfidence,
+            onClick = onRecoveryClick, modifier = Modifier.weight(1f)
+        )
+        HeroRingCell(
+            value = strain.bounded(21f), max = 21f, label = "STRAIN", accent = StrainAccent,
+            status = strainZoneLabel(strain), confidence = strainConfidence,
+            onClick = onStrainClick, modifier = Modifier.weight(1f)
+        )
     }
 }
 
 @Composable
-private fun HeroRingCell(confidence: Confidence, ring: @Composable () -> Unit) {
+private fun HeroRingCell(
+    value: Float?,
+    max: Float,
+    label: String,
+    accent: Color,
+    status: String,
+    confidence: Confidence,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val progress = ringProgress(value ?: 0f, true, RingMotion.HeroDurationMs)
+    val strain = max == 21f
+    val confidenceText = when (confidence) {
+        Confidence.HIGH -> null
+        Confidence.MEDIUM -> "Estimated"
+        Confidence.LOW -> "Low confidence"
+    }
+    val description = if (value == null) "$label, no data recorded yet. Open details."
+        else buildString {
+            append(if (strain) "$label ${fmtStrain(value)} out of 21" else "$label ${value.roundToInt()} percent")
+            append(", $status")
+            confidenceText?.let { append(", $it") }
+            append(". Open details.")
+        }
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.clip(VitalShapes.Tile).clickable(onClick = onClick)
+            .ringSemantics(description, onClick).padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        ring()
-        if (confidence != Confidence.HIGH) {
-            Spacer(Modifier.height(Spacing.sm))
-            ConfidenceBadge(confidence = confidence, compact = true)
+        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            val diameter = maxWidth.coerceAtMost(142.dp)
+            // Large figures can scale a little, but must stay inside the dial.
+            // Labels below remain fully governed by the user's text-size setting.
+            val numeralSize = (diameter.value * 0.29f).coerceIn(21f, 40f) /
+                (LocalDensity.current.fontScale / 1.2f).coerceAtLeast(1f)
+            Box(Modifier.size(diameter), contentAlignment = Alignment.Center) {
+                PerformanceDial(
+                    fraction = progress / max, accent = accent,
+                    strokeWidth = (diameter.value * 0.058f).dp,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            text = if (value == null) "—" else if (strain) fmtStrain(progress) else progress.roundToInt().toString(),
+                            style = VitalCoreType.metricMedium.copy(
+                                fontSize = numeralSize.sp, lineHeight = (numeralSize + 2f).sp,
+                                fontWeight = FontWeight.Bold, letterSpacing = (-1.2).sp
+                            ),
+                            color = if (value == null) OnSurfaceMuted else OnBackground,
+                            maxLines = 1
+                        )
+                        if (!strain && value != null) {
+                            Text("%", style = VitalCoreType.metricUnit.copy(fontSize = 11.sp),
+                                color = OnSurfaceDim, modifier = Modifier.padding(start = 1.dp, bottom = 3.dp))
+                        }
+                    }
+                    if (strain && value != null) {
+                        Text("OF 21", style = VitalCoreType.monoTiny.copy(fontSize = 8.sp), color = OnSurfaceMuted)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(label, style = VitalCoreType.eyebrow.copy(letterSpacing = 1.1.sp), color = OnBackground,
+            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = if (value == null) "No data yet" else status,
+            style = VitalCoreType.monoTiny.copy(fontSize = 10.sp, lineHeight = 13.sp, letterSpacing = 0.sp),
+            color = if (value == null) OnSurfaceMuted else accent,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (confidenceText != null && value != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(confidenceText, style = VitalCoreType.monoTiny.copy(letterSpacing = 0.sp),
+                color = OnSurfaceDim, textAlign = TextAlign.Center, maxLines = 2)
         }
     }
 }

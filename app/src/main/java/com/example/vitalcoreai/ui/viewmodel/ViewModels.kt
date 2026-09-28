@@ -13,6 +13,7 @@ import com.example.vitalcoreai.data.repository.HealthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import javax.inject.Inject
@@ -245,8 +246,16 @@ class ActivityViewModel @Inject constructor(private val repository: HealthReposi
 
 data class TrainingUiState(
     val todayLoad: Float? = null,
+    val strain: Float? = null,
+    val confidence: Confidence = Confidence.LOW,
+    val isProxyEstimate: Boolean = false,
+    val exertionMinutes: Float? = null,
+    val explanation: String? = null,
+    val strainHistory: List<Float> = emptyList(),
     val acwr: Float? = null,
     val acwrZone: String? = null,
+    val acwrIsMeaningful: Boolean? = null,
+    val acwrDaysOfHistory: Int? = null,
     val chartValues: List<Float> = emptyList(),
     val isLoading: Boolean = true
 )
@@ -261,8 +270,18 @@ class TrainingViewModel @Inject constructor(private val repository: HealthReposi
             val latest = scores.lastOrNull()
             _state.value = TrainingUiState(
                 todayLoad = latest?.trainingLoadNormalized?.let { it * 100 },
+                // Daily strain has its own persisted 0–21 scale; normalized session
+                // load remains separate and must never stand in for a missing strain.
+                strain = latest?.strain,
+                confidence = latest?.strainConfidence?.let { runCatching { Confidence.valueOf(it) }.getOrNull() } ?: Confidence.LOW,
+                isProxyEstimate = latest?.strainIsProxy == true,
+                exertionMinutes = latest?.dailyExertionMinutes,
+                explanation = latest?.strainExplanation,
+                strainHistory = scores.mapNotNull { it.strain }.takeLast(14),
                 acwr = latest?.acwr,
                 acwrZone = latest?.acwrZone,
+                acwrIsMeaningful = latest?.acwrIsMeaningful,
+                acwrDaysOfHistory = latest?.acwrDaysOfHistory,
                 chartValues = scores.mapNotNull { it.trainingLoadNormalized?.let { l -> l * 100f } }.takeLast(14),
                 isLoading = false
             )
@@ -439,19 +458,68 @@ class InsightsViewModel @Inject constructor(
 
 data class HistoryUiState(
     val scores: List<ComputedScoresEntity> = emptyList(),
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val isSyncing: Boolean = false,
+    val syncMessage: String? = null
 )
 
 @HiltViewModel
-class HistoryViewModel @Inject constructor(private val repository: HealthRepository) : ViewModel() {
+class HistoryViewModel @Inject constructor(
+    private val repository: HealthRepository,
+    @param:ApplicationContext private val context: Context
+) : ViewModel() {
     private val _state = MutableStateFlow(HistoryUiState())
     val state: StateFlow<HistoryUiState> = _state.asStateFlow()
-    init { load() }
+
+    init {
+        load()
+        syncMissingDays()
+    }
+
     private fun load() = viewModelScope.launch {
         perDay { day -> repository.scoresFrom(day - 90) }.collect { scores ->
-            _state.value = HistoryUiState(scores = scores, isLoading = false)
+            _state.update { it.copy(scores = scores, isLoading = false) }
         }
     }
+
+    /** User-triggered full 30-day backfill re-sync. */
+    fun syncNow() {
+        if (_state.value.isSyncing) return
+        _state.update { it.copy(isSyncing = true, syncMessage = null) }
+        viewModelScope.launch {
+            try {
+                val result = repository.backfillHistory(
+                    userAge   = com.example.vitalcoreai.data.UserPrefs.age(context),
+                    userMaxHR = com.example.vitalcoreai.data.UserPrefs.maxHR(context),
+                    force     = true
+                )
+                val msg = when {
+                    result.unavailable  -> "Health Connect is unavailable. Grant permissions in the Data Sources screen, then try again."
+                    result.failedDays > 0 -> "${result.refreshedDays} days synced \u00b7 ${result.failedDays} could not be read. See Data Sources."
+                    else -> "${result.refreshedDays} days refreshed \u00b7 history is up to date."
+                }
+                _state.update { it.copy(syncMessage = msg) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(syncMessage = "Sync did not complete: ${e.message}") }
+            } finally {
+                _state.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
+    /** Quiet background sync on screen open so missing rows get filled automatically. */
+    private fun syncMissingDays() = viewModelScope.launch {
+        try {
+            repository.syncToday(
+                userAge   = com.example.vitalcoreai.data.UserPrefs.age(context),
+                userMaxHR = com.example.vitalcoreai.data.UserPrefs.maxHR(context)
+            )
+        } catch (_: Exception) { /* silent */ }
+    }
+
+    fun clearSyncMessage() = _state.update { it.copy(syncMessage = null) }
 }
 
 // ─── Weekly Report ────────────────────────────────────────────────────────────
@@ -487,6 +555,7 @@ data class SettingsUiState(
     // Backfill state
     val isBackfilling: Boolean = false,
     val backfillResult: String? = null,
+    val backfillNeedsAttention: Boolean = false,
     // B9 — CSV export state
     val isExporting: Boolean = false,
     val exportResult: String? = null,
@@ -580,21 +649,30 @@ class SettingsViewModel @Inject constructor(
         prefs.edit().putBoolean(KEY_NOTIFY_COACH, on).apply()
     }
 
-    /** Force a full 30-day re-backfill — wipes the backfill completion flag first. */
+    /** Re-read existing days as well as gaps; retain the completion flag on cancellation. */
     fun forceBackfill() {
         if (_state.value.isBackfilling) return
-        _state.update { it.copy(isBackfilling = true, backfillResult = null) }
+        _state.update { it.copy(isBackfilling = true, backfillResult = null, backfillNeedsAttention = false) }
         viewModelScope.launch {
             try {
-                val prefs = context.getSharedPreferences("vitalcore_sync", Context.MODE_PRIVATE)
-                prefs.edit().remove("backfill_done_v1").apply()
-                repository.backfillHistory(
+                val result = repository.backfillHistory(
                     userAge   = _state.value.userAge,
-                    userMaxHR = _state.value.userMaxHR
+                    userMaxHR = _state.value.userMaxHR,
+                    force = true
                 )
-                _state.update { it.copy(isBackfilling = false, backfillResult = "✓ Backfill complete") }
-            } catch (e: Exception) {
-                _state.update { it.copy(isBackfilling = false, backfillResult = "✗ ${e.message}") }
+                _state.update { it.copy(
+                    backfillResult = historyRefreshMessage(result),
+                    backfillNeedsAttention = result.unavailable || result.failedDays > 0 || result.partialDays > 0
+                ) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _state.update { it.copy(
+                    backfillResult = "History refresh did not finish. Review Data Sources and retry; saved entries remain available.",
+                    backfillNeedsAttention = true
+                ) }
+            } finally {
+                _state.update { it.copy(isBackfilling = false) }
             }
         }
     }
@@ -617,6 +695,101 @@ class SettingsViewModel @Inject constructor(
                 _state.update { it.copy(isExporting = false, exportResult = "✗ ${e.message}") }
             }
         }
+    }
+}
+
+// ─── Day Detail ───────────────────────────────────────────────────────────────
+
+data class DayDetailUiState(
+    val dateEpochDay: Long = 0L,
+    val recoveryScore: Float? = null,
+    val recoveryExplanation: String? = null,
+    val readinessScore: Float? = null,
+    val sleepScore: Float? = null,
+    val sleepExplanation: String? = null,
+    val activityScore: Float? = null,
+    val stressScore: Float? = null,
+    val restingHR: Int? = null,
+    val restingHRDerived: Boolean = false,
+    val steps: Int? = null,
+    val distanceMeters: Float? = null,
+    val caloriesBurned: Int? = null,
+    val activeCalories: Int? = null,
+    val sleepDurationMinutes: Int? = null,
+    val sleepDeepMinutes: Int? = null,
+    val sleepRemMinutes: Int? = null,
+    val sleepLightMinutes: Int? = null,
+    val sleepAwakeMinutes: Int? = null,
+    val sleepEfficiencyPercent: Double? = null,
+    val sleepStagesAvailable: Boolean = false,
+    val bedtimeMinuteOfDay: Int? = null,
+    val wakeTimeMinuteOfDay: Int? = null,
+    val spO2Percent: Float? = null,
+    val spO2ReadingCount: Int? = null,
+    val floorsClimbed: Int? = null,
+    val weightKg: Float? = null,
+    val hrvRmssdMs: Double? = null,
+    val strain: Float? = null,
+    val acwr: Float? = null,
+    val acwrZone: String? = null,
+    val workouts: List<com.example.vitalcoreai.data.db.entity.ExerciseSessionEntity> = emptyList(),
+    val isLoading: Boolean = true
+)
+
+@HiltViewModel
+class DayDetailViewModel @Inject constructor(
+    savedStateHandle: androidx.lifecycle.SavedStateHandle,
+    private val dailyMetricsDao: com.example.vitalcoreai.data.db.dao.DailyMetricsDao,
+    private val computedScoresDao: com.example.vitalcoreai.data.db.dao.ComputedScoresDao,
+    private val exerciseSessionDao: com.example.vitalcoreai.data.db.dao.ExerciseSessionDao
+) : ViewModel() {
+
+    private val epochDay: Long = savedStateHandle.get<Long>("epochDay") ?: 0L
+
+    private val _state = MutableStateFlow(DayDetailUiState(dateEpochDay = epochDay))
+    val state: StateFlow<DayDetailUiState> = _state.asStateFlow()
+
+    init { load() }
+
+    private fun load() = viewModelScope.launch {
+        val metrics  = dailyMetricsDao.getForDay(epochDay)
+        val scores   = computedScoresDao.getForDay(epochDay)
+        val workouts = exerciseSessionDao.getRange(epochDay, epochDay)
+        _state.value = DayDetailUiState(
+            dateEpochDay          = epochDay,
+            recoveryScore         = scores?.recoveryScore,
+            recoveryExplanation   = scores?.recoveryExplanation,
+            readinessScore        = scores?.readinessScore,
+            sleepScore            = scores?.sleepScore,
+            sleepExplanation      = scores?.sleepExplanation,
+            activityScore         = scores?.activityScore,
+            stressScore           = scores?.stressScore,
+            restingHR             = metrics?.restingHR,
+            restingHRDerived      = metrics?.restingHRDerived ?: false,
+            steps                 = metrics?.steps,
+            distanceMeters        = metrics?.distanceMeters,
+            caloriesBurned        = metrics?.caloriesBurned,
+            activeCalories        = metrics?.activeCalories,
+            sleepDurationMinutes  = metrics?.sleepDurationMinutes,
+            sleepDeepMinutes      = metrics?.sleepDeepMinutes,
+            sleepRemMinutes       = metrics?.sleepRemMinutes,
+            sleepLightMinutes     = metrics?.sleepLightMinutes,
+            sleepAwakeMinutes     = metrics?.sleepAwakeMinutes,
+            sleepEfficiencyPercent= metrics?.sleepEfficiencyPercent,
+            sleepStagesAvailable  = metrics?.sleepStagesAvailable ?: false,
+            bedtimeMinuteOfDay    = metrics?.bedtimeMinuteOfDay,
+            wakeTimeMinuteOfDay   = metrics?.wakeTimeMinuteOfDay,
+            spO2Percent           = metrics?.spO2Percent,
+            spO2ReadingCount      = metrics?.spO2ReadingCount,
+            floorsClimbed         = metrics?.floorsClimbed,
+            weightKg              = metrics?.weightKg,
+            hrvRmssdMs            = metrics?.hrvRmssdMs,
+            strain                = scores?.strain,
+            acwr                  = scores?.acwr,
+            acwrZone              = scores?.acwrZone,
+            workouts              = workouts,
+            isLoading             = false
+        )
     }
 }
 

@@ -131,6 +131,61 @@ class ViewModelTests {
         assertTrue("Chart should cap at 14", vm.state.value.chartValues.size <= 14)
     }
 
+    // ── TrainingViewModel ─────────────────────────────────────────────────────
+
+    @Test
+    fun `TrainingViewModel displays native strain independently of normalized load`() = runTest {
+        val scores = (1..20).map { day ->
+            buildScores().copy(
+                dateEpochDay = 19900L + day,
+                strain = day.toFloat(),
+                trainingLoadNormalized = 0.42f,
+                strainConfidence = "LOW",
+                strainIsProxy = true,
+                dailyExertionMinutes = 90f,
+                strainExplanation = "Estimated from steps and logged exercise",
+                acwrIsMeaningful = true,
+                acwrDaysOfHistory = 20
+            )
+        }
+        val repo: HealthRepository = mock {
+            on { scoresFrom(any()) } doReturn flowOf(scores)
+        }
+
+        val state = TrainingViewModel(repo).state.value
+
+        assertFalse(state.isLoading)
+        assertEquals(20f, state.strain)
+        assertEquals((7..20).map(Int::toFloat), state.strainHistory)
+        assertEquals(Confidence.LOW, state.confidence)
+        assertTrue(state.isProxyEstimate)
+        assertEquals(90f, state.exertionMinutes)
+        assertEquals("Estimated from steps and logged exercise", state.explanation)
+        assertEquals(0.9f, state.acwr)
+        assertEquals("OPTIMAL", state.acwrZone)
+        assertEquals(true, state.acwrIsMeaningful)
+        assertEquals(20, state.acwrDaysOfHistory)
+    }
+
+    @Test
+    fun `TrainingViewModel keeps missing strain unavailable despite legacy load`() = runTest {
+        val scores = listOf(
+            buildScores().copy(strain = 9.2f),
+            buildScores().copy(strain = null, trainingLoadNormalized = 0.7f, strainConfidence = "UNKNOWN")
+        )
+        val repo: HealthRepository = mock {
+            on { scoresFrom(any()) } doReturn flowOf(scores)
+        }
+
+        val state = TrainingViewModel(repo).state.value
+
+        assertNull(state.strain)
+        assertEquals(listOf(9.2f), state.strainHistory)
+        assertEquals(Confidence.LOW, state.confidence)
+        assertFalse(state.isProxyEstimate)
+        assertNull(state.exertionMinutes)
+    }
+
     // ── HistoryViewModel ──────────────────────────────────────────────────────
 
     @Test

@@ -36,6 +36,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -45,9 +51,11 @@ import com.example.vitalcoreai.theme.Motion
 import com.example.vitalcoreai.theme.OnSurfaceDim
 import com.example.vitalcoreai.theme.OnSurfaceMuted
 import com.example.vitalcoreai.theme.RecoveryAccent
+import com.example.vitalcoreai.theme.HairlineColor
 import com.example.vitalcoreai.theme.Sizes
 import com.example.vitalcoreai.theme.SkeletonColor
 import com.example.vitalcoreai.theme.Spacing
+import com.example.vitalcoreai.theme.SurfaceL1
 import com.example.vitalcoreai.theme.VitalCoreType
 import com.example.vitalcoreai.theme.VitalShapes
 import com.example.vitalcoreai.ui.viewmodel.OpResult
@@ -73,7 +81,8 @@ fun NoDataValue(
     modifier: Modifier = Modifier,
     style: TextStyle = VitalCoreType.metricMedium,
 ) {
-    Text(text = "—", style = style, color = OnSurfaceMuted, modifier = modifier)
+    Text(text = "—", style = style, color = OnSurfaceMuted,
+        modifier = modifier.clearAndSetSemantics { contentDescription = "No data available" })
 }
 
 /** Shimmering placeholder. Hero areas use this, NOT a spinner. */
@@ -97,6 +106,7 @@ fun VitalSkeleton(
             .clip(shape)
             .alpha(alpha)
             .background(SkeletonColor)
+            .clearAndSetSemantics { }
     )
 }
 
@@ -139,23 +149,35 @@ fun VitalEmptyState(
     action: @Composable (() -> Unit)? = null,
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.xxl),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg, vertical = Spacing.xxxl),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = accent.copy(alpha = 0.40f),
-            modifier = Modifier.size(40.dp)
-        )
-        Spacer(Modifier.height(Spacing.md))
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(VitalShapes.Card)
+                .background(SurfaceL1)
+                .border(Sizes.hairline, HairlineColor, VitalShapes.Card),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+        Spacer(Modifier.height(Spacing.xl))
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = com.example.vitalcoreai.theme.OnBackground,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() }
         )
-        Spacer(Modifier.height(Spacing.xs))
+        Spacer(Modifier.height(Spacing.sm))
         Text(
             text = body,
             style = MaterialTheme.typography.bodyMedium,
@@ -222,8 +244,9 @@ private fun Banner(
         modifier = modifier
             .fillMaxWidth()
             .clip(VitalShapes.Tile)
-            .background(color.copy(alpha = 0.10f))
-            .border(Sizes.hairline, color.copy(alpha = 0.30f), VitalShapes.Tile)
+            .background(color.copy(alpha = 0.08f))
+            .border(Sizes.hairline, color.copy(alpha = 0.20f), VitalShapes.Tile)
+            .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(horizontal = Spacing.lg, vertical = Spacing.md),
         verticalAlignment = Alignment.CenterVertically
     ) {

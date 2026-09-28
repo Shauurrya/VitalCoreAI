@@ -56,8 +56,17 @@ data class CoachContext(
     val forecast: ForecastBlock?,
     val recommendation: RecommendationBlock?,
     val insights: List<InsightBlock>,
-    val confidence: ConfidenceBlock
+    val confidence: ConfidenceBlock,
+    val evidence: EvidenceBlock? = null
 ) {
+
+    /** Freshness belongs to the evidence, not to the time an answer was opened. */
+    data class EvidenceBlock(
+        val dateEpochDay: Long,
+        val latestMeasurementMs: Long?,
+        val staleMetrics: List<String> = emptyList(),
+        val scoredDaysThisWeek: Int = 0
+    )
 
     data class TodayBlock(
         val dateEpochDay: Long,
@@ -164,7 +173,9 @@ data class CoachContext(
         val readyRegions: List<String>,
         val avoidRegions: List<String>,
         val rationale: List<String>,
-        val recoveryActions: List<String>
+        val recoveryActions: List<String>,
+        val confidence: String = "LOW",
+        val alternative: String? = null
     )
 
     data class InsightBlock(
@@ -288,6 +299,8 @@ data class CoachContext(
                 arr("avoid_regions", recommendation.avoidRegions)
                 arr("rationale", recommendation.rationale)
                 arr("recovery_actions", recommendation.recoveryActions)
+                str("confidence", recommendation.confidence)
+                str("alternative", recommendation.alternative)
             }
         }
         arrOfObj("insights", insights) { i ->
@@ -302,6 +315,14 @@ data class CoachContext(
             arr("present", confidence.present)
             arr("missing", confidence.missing)
             obj("factors") { confidence.factors.forEach { (k, v) -> num(k.lowercase(), v) } }
+        }
+        evidence?.let { e ->
+            obj("evidence") {
+                num("date_epoch_day", e.dateEpochDay)
+                num("latest_measurement_ms", e.latestMeasurementMs)
+                arr("stale_metrics", e.staleMetrics)
+                num("scored_days_this_week", e.scoredDaysThisWeek)
+            }
         }
     }
 

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,7 +27,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -95,7 +99,7 @@ fun TrendLineChart(
     valueFormat: (Float) -> String = { it.roundToInt().toString() },
     emptyMessage: String = "Not enough data yet",
 ) {
-    if (values.size < 2) {
+    if (values.size < 2 || values.any { !it.isFinite() }) {
         ChartPlaceholder(message = emptyMessage, height = height, modifier = modifier)
         return
     }
@@ -166,7 +170,11 @@ fun TrendLineChart(
             bottomAxis = bottomAxis
         ),
         modelProducer = modelProducer,
-        modifier = modifier.fillMaxWidth().height(height)
+        modifier = modifier.fillMaxWidth().height(height).semantics {
+            contentDescription = "Trend, ${values.size} readings. " +
+                "First ${valueFormat(values.first())}, latest ${valueFormat(values.last())}. " +
+                "Range ${valueFormat(values.min())} to ${valueFormat(values.max())}."
+        }
     )
 }
 
@@ -216,6 +224,7 @@ fun StrainBarChart(
         return
     }
     val maxStrain = 21f
+    val gap = if (values.size > 14) 2.dp else 5.dp
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(modifier = Modifier.fillMaxWidth().height(height)) {
@@ -246,23 +255,29 @@ fun StrainBarChart(
 
             Row(
                 modifier = Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(gap),
                 verticalAlignment = Alignment.Bottom
             ) {
                 values.forEachIndexed { index, strain ->
                     StrainBar(
-                        strain = strain,
+                        strain = strain?.takeIf { it.isFinite() }?.coerceIn(0f, maxStrain),
                         index = index,
                         maxStrain = maxStrain,
                         chartHeight = height,
                         isHighlighted = index == highlightIndex,
                         modifier = Modifier
                             .weight(1f)
-                            .widthIn(min = 6.dp)
                             .fillMaxHeight()
+                            .semantics {
+                                val day = xLabels.getOrNull(index)?.takeIf { it.isNotBlank() }
+                                    ?: "Day ${index + 1}"
+                                contentDescription = if (strain == null || !strain.isFinite())
+                                    "$day, no strain recorded"
+                                else "$day, strain ${String.format(java.util.Locale.US, "%.1f", strain.coerceIn(0f, maxStrain))} out of 21"
+                            }
                             .then(
                                 if (onBarClick != null) {
-                                    Modifier.clickable { onBarClick(index) }
+                                    Modifier.clickable(role = Role.Button) { onBarClick(index) }
                                 } else Modifier
                             )
                     )
@@ -274,13 +289,13 @@ fun StrainBarChart(
             Spacer(Modifier.height(Spacing.xs))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(gap)
             ) {
                 values.indices.forEach { index ->
                     Text(
                         text = xLabels.getOrElse(index) { "" },
                         style = VitalCoreType.monoTiny,
-                        color = OnSurfaceMuted,
+                        color = if (index == highlightIndex) accentForHighlight(values[index]) else OnSurfaceMuted,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         modifier = Modifier.weight(1f)
@@ -334,13 +349,17 @@ private fun StrainBar(
                     .fillMaxWidth()
                     .height((chartHeight * fraction).coerceAtLeast(2.dp))
                     .clip(VitalShapes.ChartBar)
-                    .background(
-                        strainTierColor(strain).copy(alpha = if (isHighlighted) 1f else 0.72f)
-                    )
+                    .background(Brush.verticalGradient(listOf(
+                        strainTierColor(strain).copy(alpha = if (isHighlighted) 1f else 0.82f),
+                        strainTierColor(strain).copy(alpha = if (isHighlighted) 0.70f else 0.36f)
+                    )))
             )
         }
     }
 }
+
+private fun accentForHighlight(value: Float?): Color =
+    value?.takeIf { it.isFinite() }?.let { strainTierColor(it) } ?: OnSurfaceMuted
 
 // ───────────────────────────────────────────────────────────────────────────
 // WeekdayBarRow
@@ -360,20 +379,22 @@ fun WeekdayBarRow(
     height: Dp = 96.dp,
     labels: List<String> = listOf("M", "T", "W", "T", "F", "S", "S"),
 ) {
+    val ceiling = max.takeIf { it.isFinite() && it > 0f } ?: 100f
+    val weekValues = List(7) { index -> values.getOrNull(index)?.takeIf { it.isFinite() } }
     Row(
         modifier = modifier.fillMaxWidth().height(height),
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
         verticalAlignment = Alignment.Bottom
     ) {
-        values.take(7).forEachIndexed { index, value ->
+        weekValues.forEachIndexed { index, value ->
             val barColor = when {
                 value == null -> SurfaceL2
                 !useTierColors -> accent
-                max <= 21.5f -> strainTierColor(value)
+                ceiling <= 21.5f -> strainTierColor(value)
                 else -> recoveryTierColor(value)
             }
             val fraction by animateFloatAsState(
-                targetValue = ((value ?: 0f) / max).coerceIn(0f, 1f),
+                targetValue = ((value ?: 0f) / ceiling).coerceIn(0f, 1f),
                 animationSpec = tween(
                     durationMillis = Motion.barMs,
                     delayMillis = 18 * index,
@@ -382,7 +403,10 @@ fun WeekdayBarRow(
                 label = "weekday_bar_$index"
             )
             Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f).fillMaxHeight().semantics {
+                    contentDescription = "${labels.getOrElse(index) { "Day ${index + 1}" }}, " +
+                        if (value == null) "no data" else "${value.roundToInt()} out of ${ceiling.roundToInt()}"
+                },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Bottom
             ) {
@@ -412,7 +436,7 @@ fun WeekdayBarRow(
 // MiniSparkline
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Canvas polyline with a dot on the final point. Fewer than 2 points → nothing. */
+/** Inset sparkline with a light area wash and a fully visible latest-reading dot. */
 @Composable
 fun MiniSparkline(
     values: List<Float>,
@@ -421,29 +445,36 @@ fun MiniSparkline(
     height: Dp = 32.dp,
     strokeWidth: Dp = 2.dp,
 ) {
-    if (values.size < 2) return
+    if (values.size < 2 || values.any { !it.isFinite() }) return
 
     val min = values.min()
     val max = values.max()
-    val span = (max - min).takeIf { it > 0.0001f } ?: 1f
+    val span = max - min
 
     Canvas(modifier = modifier.fillMaxWidth().height(height)) {
-        val stepX = size.width / (values.size - 1).toFloat()
+        val inset = 4.dp.toPx().coerceAtMost(kotlin.math.min(size.width, size.height) / 2f)
+        val plotHeight = (size.height - inset * 2f).coerceAtLeast(0f)
+        val stepX = (size.width - inset * 2f).coerceAtLeast(0f) / (values.size - 1).toFloat()
         val points = values.mapIndexed { i, v ->
             Offset(
-                x = i * stepX,
-                y = size.height - ((v - min) / span) * size.height
+                x = inset + i * stepX,
+                y = if (span < 0.0001f) size.height / 2f
+                    else size.height - inset - ((v - min) / span) * plotHeight
             )
         }
-        for (i in 0 until points.size - 1) {
-            drawLine(
-                color = accent,
-                start = points[i],
-                end = points[i + 1],
-                strokeWidth = strokeWidth.toPx(),
-                cap = StrokeCap.Round
-            )
+        val line = Path().apply {
+            moveTo(points.first().x, points.first().y)
+            points.drop(1).forEach { lineTo(it.x, it.y) }
         }
-        drawCircle(color = accent, radius = 3.dp.toPx(), center = points.last())
+        val area = Path().apply {
+            addPath(line)
+            lineTo(points.last().x, size.height)
+            lineTo(points.first().x, size.height)
+            close()
+        }
+        drawPath(area, Brush.verticalGradient(listOf(accent.copy(alpha = 0.14f), Color.Transparent)))
+        drawPath(line, accent, style = Stroke(strokeWidth.toPx(), cap = StrokeCap.Round))
+        drawCircle(color = accent.copy(alpha = 0.16f), radius = 4.dp.toPx(), center = points.last())
+        drawCircle(color = accent, radius = 2.dp.toPx(), center = points.last())
     }
 }

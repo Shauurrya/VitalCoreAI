@@ -259,6 +259,9 @@ interface AchievementDao {
 // B6 — Sync state DAO (incremental sync tracking)
 @Dao
 interface SyncStateDao {
+    @Query("SELECT * FROM sync_state ORDER BY recordType ASC")
+    fun observeAll(): Flow<List<SyncStateEntity>>
+
     @Query("SELECT * FROM sync_state WHERE recordType = :type")
     suspend fun getForType(type: String): SyncStateEntity?
 

@@ -33,6 +33,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -112,7 +114,7 @@ private fun trendDescription(direction: TrendDirection): String = when (directio
     TrendDirection.NEUTRAL -> "Stable"
 }
 
-/** "+3" / "−2" in a pill-shaped tinted chip. A null delta renders nothing. */
+/** "+3" / "−2" in a quiet tinted chip. A null delta renders nothing. */
 @Composable
 fun DeltaChip(
     delta: Float?,
@@ -121,7 +123,7 @@ fun DeltaChip(
     decimals: Int = 0,
     higherIsBetter: Boolean = true,
 ) {
-    if (delta == null) return
+    if (delta == null || !delta.isFinite()) return
     val direction = when {
         delta > 0.05f  -> TrendDirection.UP
         delta < -0.05f -> TrendDirection.DOWN
@@ -161,7 +163,6 @@ fun DeltaChip(
         modifier = modifier
             .clip(VitalShapes.Pill)
             .background(color.copy(alpha = Alphas.tintedFill))
-            .border(Sizes.hairline, color.copy(alpha = Alphas.tintedBorder), VitalShapes.Pill)
             .padding(horizontal = Spacing.sm, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -191,7 +192,7 @@ fun ConfidenceBadge(
     )
 }
 
-/** Generic tinted pill: background colour@12%, border colour@30%. */
+/** Compact status pill with a soft fill and a restrained outline. */
 @Composable
 fun AccentPill(
     text: String,
@@ -203,8 +204,8 @@ fun AccentPill(
         modifier = modifier
             .clip(VitalShapes.Pill)
             .background(color.copy(alpha = Alphas.tintedFill))
-            .border(Sizes.hairline, color.copy(alpha = Alphas.tintedBorder), VitalShapes.Pill)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .border(Sizes.hairline, color.copy(alpha = 0.14f), VitalShapes.Pill)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (icon != null) {
@@ -235,6 +236,7 @@ fun BreakdownRow(
     factor: ScoreFactor,
     modifier: Modifier = Modifier,
     accent: Color = RecoveryAccent,
+    scoreColor: Color = recoveryTierColor(factor.score),
 ) {
     val bar = remember(factor.name) { Animatable(0f) }
     LaunchedEffect(factor.score) {
@@ -243,13 +245,11 @@ fun BreakdownRow(
             tween(Motion.barMs, easing = Motion.barEasing)
         )
     }
-    val scoreColorForFactor = recoveryTierColor(factor.score)
-
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = Spacing.sm)) {
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = Spacing.md)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = factor.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = OnBackground,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -257,8 +257,8 @@ fun BreakdownRow(
             )
             Text(
                 text = factor.score.roundToInt().toString(),
-                style = MaterialTheme.typography.labelLarge,
-                color = scoreColorForFactor
+                style = VitalCoreType.metricSmall,
+                color = scoreColor
             )
             Spacer(Modifier.width(Spacing.xs))
             Text(
@@ -267,11 +267,11 @@ fun BreakdownRow(
                 color = OnSurfaceMuted
             )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Spacing.sm))
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(Sizes.barTrack)
+                .height(6.dp)
                 .clip(VitalShapes.Bar)
                 .background(SurfaceL2)
         ) {
@@ -286,18 +286,16 @@ fun BreakdownRow(
             )
         }
         if (factor.description.isNotBlank()) {
-            Spacer(Modifier.height(Spacing.xs))
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = factor.description,
                 style = MaterialTheme.typography.bodySmall,
-                color = OnSurfaceMuted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                color = OnSurfaceDim
             )
         }
         factor.delta?.let { d ->
             Spacer(Modifier.height(Spacing.xxs))
-            Text(text = d, style = VitalCoreType.monoTiny, color = OnSurfaceDim, maxLines = 1)
+            Text(text = d, style = VitalCoreType.monoTiny, color = OnSurfaceDim)
         }
     }
 }
@@ -319,7 +317,8 @@ fun ZoneBar(
     height: Dp = 10.dp,
     showLegend: Boolean = false,
 ) {
-    val total = segments.sumOf { it.fraction.toDouble() }.toFloat()
+    val validSegments = segments.filter { it.fraction.isFinite() && it.fraction > 0f }
+    val total = validSegments.sumOf { it.fraction.toDouble() }.toFloat()
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -328,9 +327,14 @@ fun ZoneBar(
                 .height(height)
                 .clip(VitalShapes.Bar)
                 .background(SurfaceL2)
+                .semantics {
+                    contentDescription = if (total <= 0.0001f) "No distribution data"
+                    else validSegments.joinToString { "${it.label}, ${((it.fraction / total) * 100f).roundToInt()} percent" }
+                },
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             if (total > 0.0001f) {
-                segments.filter { it.fraction > 0f }.forEach { seg ->
+                validSegments.forEach { seg ->
                     Box(
                         modifier = Modifier
                             .weight(seg.fraction / total)
@@ -342,7 +346,7 @@ fun ZoneBar(
         }
         if (showLegend && total > 0.0001f) {
             Spacer(Modifier.height(Spacing.md))
-            segments.chunked(2).forEach { pair ->
+            validSegments.chunked(2).forEach { pair ->
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.md)

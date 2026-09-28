@@ -1,5 +1,6 @@
 package com.example.vitalcoreai.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -32,7 +33,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.health.connect.client.PermissionController
+import com.example.vitalcoreai.data.healthconnect.HealthConnectManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.vitalcoreai.theme.*
+import com.example.vitalcoreai.ui.components.*
 import com.example.vitalcoreai.ui.viewmodel.*
 import java.time.Instant
 import java.time.ZoneId
@@ -923,134 +931,137 @@ fun DataSourcesScreen(
     onBack: () -> Unit,
     viewModel: DataSourcesViewModel = hiltViewModel()
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        viewModel.refreshAccess()
+        if (granted.any { it in HealthConnectManager.MINIMUM_PERMISSIONS }) {
+            viewModel.readData()
+        }
+    }
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshAccess()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Data Sources", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Background, titleContentColor = OnBackground
-                )
-            )
-        },
-        containerColor = Background
-    ) { padding ->
+    VitalScreenScaffold(topBar = {
+        VitalTopBar(title = "Data Sources", subtitle = "Access and measurement freshness", accent = RecoveryAccent, onBack = onBack)
+    }) {
         if (state.isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = RecoveryAccent)
+            item {
+                Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = RecoveryAccent)
+                }
             }
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                state.sources.forEach { source ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = SurfaceL1),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    val icon = when {
-                                        source.name.contains("Health Connect") -> Icons.Filled.HealthAndSafety
-                                        source.name.contains("Watch") -> Icons.Filled.Watch
-                                        else -> Icons.Filled.Edit
-                                    }
-                                    Icon(icon, null, tint = RecoveryAccent, modifier = Modifier.size(24.dp))
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(source.name, color = OnBackground,
-                                        fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                                }
-
-                                val statusColor = if (source.isConnected) ActivityAccent else AlertRed
-                                Text(
-                                    if (source.isConnected) "Connected" else "Disconnected",
-                                    color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            Spacer(Modifier.height(8.dp))
-                            Text(source.description, color = OnSurfaceDim, fontSize = 12.sp)
-
-                            source.lastSyncTime?.let { time ->
-                                Spacer(Modifier.height(4.dp))
-                                Text("Last sync: $time", color = OnSurfaceMuted, fontSize = 11.sp)
-                            }
-
-                            Spacer(Modifier.height(12.dp))
-                            Text("Data Types", color = OnSurfaceDim, fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(4.dp))
-
-                            source.dataTypes.forEach { dataType ->
-                                val hasCheck = dataType.endsWith("✓")
-                                val hasCross = dataType.endsWith("✗")
-                                val color = when {
-                                    hasCheck -> ActivityAccent
-                                    hasCross -> AlertRed
-                                    else -> OnSurfaceDim
-                                }
-                                Text("  • $dataType", color = color, fontSize = 12.sp)
-                            }
-
-                            Spacer(Modifier.height(8.dp))
-                            HorizontalDivider(color = DividerColor)
-                            Spacer(Modifier.height(8.dp))
-
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Permission", color = OnSurfaceMuted, fontSize = 11.sp)
-                                Text(source.permissionStatus, color = OnSurfaceDim, fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium)
-                            }
-                        }
-                    }
-                }
-
-                // Privacy notice
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SurfaceL2),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Filled.Lock, null, tint = ActivityAccent, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text("Privacy First", color = OnBackground,
-                                fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "All data is stored locally on your device. " +
-                                        "No analytics, no tracking, no telemetry. " +
-                                        "Your health data never leaves your phone.",
-                                color = OnSurfaceDim, fontSize = 12.sp, lineHeight = 18.sp
+            item {
+                VitalCard(modifier = Modifier.fillMaxWidth(), accent = RecoveryAccent) {
+                    Text("HEALTH CONNECT", style = VitalCoreType.eyebrow, color = OnSurfaceDim)
+                    Spacer(Modifier.height(12.dp))
+                    Text(state.connectionLabel, style = MaterialTheme.typography.titleMedium, color = OnBackground)
+                    Spacer(Modifier.height(8.dp))
+                    Text("A read checks the data already shared with Health Connect. It cannot make a wearable upload new measurements.",
+                        style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    Spacer(Modifier.height(8.dp))
+                    Text("For Galaxy Watch data, enable Health Connect sharing in Samsung Health and sync the watch there first.",
+                        style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedButton(
+                        onClick = {
+                            permissionLauncher.launch(
+                                HealthConnectManager.ALL_PERMISSIONS
                             )
-                        }
+                        },
+                        enabled = state.available == true,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) { Text("Grant or update VitalCore access") }
+                    Button(
+                        onClick = viewModel::readData,
+                        enabled = state.available == true && !state.isSyncing,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Text(if (state.isSyncing) "Reading data…" else "Read data now")
                     }
+                    OutlinedButton(onClick = viewModel::openHealthConnect, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text(if (state.available == true) "Manage Health Connect access" else "Open or install Health Connect")
+                    }
+                    TextButton(onClick = viewModel::refreshAccess, enabled = !state.isChecking, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (state.isChecking) "Checking access…" else "Recheck access")
+                    }
+                    state.message?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    }
+                    state.accessError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = StressAccent)
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DividerColor)
+                    Text("Background reads: ${state.backgroundAccess}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Extended history: ${state.historyAccess}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
                 }
-
-                Spacer(Modifier.height(32.dp))
+            }
+            item {
+                VitalCard(modifier = Modifier.fillMaxWidth()) {
+                    Text("Source and device", style = MaterialTheme.typography.titleSmall, color = OnBackground)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Source apps are taken from record metadata when available. The wearable model is unknown; VitalCore does not establish a direct watch connection.",
+                        style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                }
+            }
+            item { SectionHeader("Read outcomes") }
+            items(state.sources, key = { it.recordType }) { source -> DataSourceReadCard(source) }
+            item {
+                VitalCard(modifier = Modifier.fillMaxWidth()) {
+                    Text("Manual entries · always available", style = MaterialTheme.typography.titleSmall, color = OnBackground)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Check-ins, journal entries and workout notes are saved on this device and do not require Health Connect access.",
+                        style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                }
             }
         }
     }
 }
+
+@Composable
+private fun DataSourceReadCard(source: DataSourceItem) {
+    val accent = when (source.status) {
+        DataReadStatus.READ -> ActivityAccent
+        DataReadStatus.FAILED, DataReadStatus.PERMISSION_DENIED -> StressAccent
+        DataReadStatus.DELAYED -> SleepAccent
+        else -> OnSurfaceDim
+    }
+    VitalCard(modifier = Modifier.fillMaxWidth()) {
+        Text(source.name, style = MaterialTheme.typography.titleMedium, color = OnBackground)
+        Spacer(Modifier.height(4.dp))
+        Text(source.statusLabel, style = MaterialTheme.typography.labelLarge, color = accent)
+        Spacer(Modifier.height(10.dp))
+        Text(source.explanation, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+        source.dataNotes.forEach { note ->
+            Spacer(Modifier.height(8.dp))
+            Text(note, style = MaterialTheme.typography.bodySmall, color = OnBackground)
+        }
+        HorizontalDivider(Modifier.padding(vertical = 12.dp), color = DividerColor)
+        val sources = source.sourceApps.joinToString().ifBlank { "Unknown · no origin recorded" }
+        Text("Source app: $sources", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+        Spacer(Modifier.height(6.dp))
+        Text("Last attempted read: ${sourceTime(source.lastAttemptMs)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+        Spacer(Modifier.height(6.dp))
+        Text("Last successful read: ${sourceTime(source.lastSuccessfulReadMs)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+        Spacer(Modifier.height(6.dp))
+        Text("Latest known measurement: ${sourceTime(source.latestMeasurementMs)}", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+        Spacer(Modifier.height(12.dp))
+        Text(source.nextAction, style = MaterialTheme.typography.bodySmall, color = OnBackground)
+    }
+}
+
+private fun sourceTime(timestampMs: Long?): String = timestampMs?.takeIf { it > 0 }?.let {
+    Instant.ofEpochMilli(it).atZone(VitalTime.zone()).format(DateTimeFormatter.ofPattern("MMM d, yyyy · h:mm a"))
+} ?: "Not recorded"
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
 

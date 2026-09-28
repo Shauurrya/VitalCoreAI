@@ -5,6 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.vitalcoreai.analytics.ScorePipeline
 import com.example.vitalcoreai.coach.CoachEngine
+import com.example.vitalcoreai.coach.DailyPlan
+import com.example.vitalcoreai.coach.DailyPlanBuilder
+import com.example.vitalcoreai.coach.PlanActivity
+import com.example.vitalcoreai.coach.PlanStatus
+import com.example.vitalcoreai.data.DailyPlanStore
+import com.example.vitalcoreai.data.db.dao.CheckInDao
 import com.example.vitalcoreai.core.time.VitalTime
 import com.example.vitalcoreai.core.time.perDay
 import com.example.vitalcoreai.data.UserPrefs
@@ -54,7 +60,9 @@ data class HomeUiState(
     val daysWithoutTraining: Int? = null,
     val userName: String? = null,
     val isLoading: Boolean = true,
-    val syncError: String? = null
+    val syncError: String? = null,
+    val dailyPlan: DailyPlan? = null,
+    val checkInCompleted: Boolean = false
 )
 
 /** Tomorrow's readiness, always a range. A midpoint would imply precision that is not there. */
@@ -106,7 +114,10 @@ data class RecommendationState(
     val type: String,
     val intensity: String,
     val volumePct: Int?,
-    val detail: String?
+    val detail: String?,
+    val confidence: String? = null,
+    val reasons: List<String> = emptyList(),
+    val alternative: String? = null
 ) {
     /** "Upper-body strength · Moderate intensity" — the Home screen's TODAY line. */
     val summaryLine: String get() = "$type · $intensity intensity"
@@ -132,7 +143,9 @@ data class ScoreCardData(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: HealthRepository,
-    @param:ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    private val checkInDao: CheckInDao,
+    private val planStore: DailyPlanStore
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -147,7 +160,7 @@ class HomeViewModel @Inject constructor(
      * when the local day actually changes.
      */
     val todayExercises: StateFlow<List<ExerciseSessionEntity>> =
-        perDay { day -> repository.exerciseFrom(day) }
+        perDay { day -> repository.exerciseFrom(day).map { sessions -> sessions.filter { it.dateEpochDay == day } } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
@@ -161,9 +174,17 @@ class HomeViewModel @Inject constructor(
                 combine(
                     repository.latestScores(),
                     repository.metricsFrom(today - 30),
-                    repository.exerciseFrom(today - 30)
-                ) { scores, metricsList, exerciseList ->
-                    buildState(today, scores, metricsList, exerciseList)
+                    repository.exerciseFrom(today - 30),
+                    checkInDao.getFrom(today),
+                    planStore.observe(today)
+                ) { scores, metricsList, exerciseList, checkIns, savedPlan ->
+                    buildState(today, scores, metricsList, exerciseList).copy(
+                        checkInCompleted = checkIns.any { it.dateEpochDay == today },
+                        dailyPlan = DailyPlanBuilder.build(today, scores,
+                            stale = metricsList.find { it.dateEpochDay == today }
+                                ?.let { !it.staleRecordTypes.isNullOrBlank() } ?: true,
+                            sleepNeedMinutes = UserPrefs.sleepNeedMinutes(context), saved = savedPlan)
+                    )
                 }
             }.catch { e ->
                 _uiState.update { it.copy(isLoading = false, syncError = e.message) }
@@ -276,7 +297,8 @@ class HomeViewModel @Inject constructor(
     private fun ComputedScoresEntity?.toRecommendationState(): RecommendationState? {
         val type = this?.recommendationType ?: return null
         val intensity = recommendationIntensity ?: return null
-        return RecommendationState(type, intensity, recommendationVolumePct, recommendationDetail)
+        return RecommendationState(type, intensity, recommendationVolumePct, recommendationDetail,
+            recommendationConfidence, ScorePipeline.decodeTextList(recommendationRationale), recommendationAlternative)
     }
 
     private fun ComputedScoresEntity?.toSleepConsistencyState(): SleepConsistencyState? {
@@ -391,4 +413,26 @@ class HomeViewModel @Inject constructor(
     }
 
     fun refresh() { SyncWorker.syncNow(context, UserPrefs.age(context), UserPrefs.maxHR(context)) }
+
+    fun setActivityStatus(status: PlanStatus) {
+        val plan = uiState.value.dailyPlan ?: return
+        if (plan.day != VitalTime.todayEpochDay()) return
+        if (plan.hasSavedChoice) {
+            planStore.setActivityStatus(plan.day, status)
+        } else {
+            planStore.saveActivity(plan.day, plan.activity.copy(status = status), plan.suggestedActivity)
+        }
+    }
+
+    fun chooseActivity(activity: PlanActivity) {
+        val plan = uiState.value.dailyPlan ?: return
+        if (plan.day != VitalTime.todayEpochDay()) return
+        planStore.saveActivity(plan.day, activity.copy(status = PlanStatus.SAVED), plan.suggestedActivity)
+    }
+
+    fun setSleepPlan(minutes: Int, status: PlanStatus) {
+        val plan = uiState.value.dailyPlan ?: return
+        if (plan.day != VitalTime.todayEpochDay()) return
+        planStore.saveSleep(plan.day, minutes, status)
+    }
 }

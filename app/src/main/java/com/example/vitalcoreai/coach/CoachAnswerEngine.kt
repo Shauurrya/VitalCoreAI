@@ -40,13 +40,37 @@ object CoachAnswerEngine {
         val hasSufficientData: Boolean
     )
 
-    fun answer(intent: CoachIntent, context: CoachContext): Answer = when (intent) {
-        CoachIntent.WHY_AM_I_LOW -> whyAmILow(context)
-        CoachIntent.WHAT_SHOULD_I_TRAIN -> whatShouldITrain(context)
-        CoachIntent.WHY_AM_I_TIRED -> whyAmITired(context)
-        CoachIntent.WHAT_TONIGHT -> whatTonight(context)
-        CoachIntent.WEEKLY_REVIEW -> weeklyReview(context)
-        CoachIntent.FREEFORM -> overview(context)
+    fun answer(intent: CoachIntent, context: CoachContext): Answer {
+        val answer = when (intent) {
+            CoachIntent.WHY_AM_I_LOW -> whyAmILow(context)
+            CoachIntent.WHAT_SHOULD_I_TRAIN -> whatShouldITrain(context)
+            CoachIntent.WHY_AM_I_TIRED -> whyAmITired(context)
+            CoachIntent.WHAT_TONIGHT -> whatTonight(context)
+            CoachIntent.WEEKLY_REVIEW -> weeklyReview(context)
+            CoachIntent.FREEFORM -> overview(context)
+        }
+        val stale = context.evidence?.staleMetrics.orEmpty()
+        return answer.copy(
+            body = if (stale.isEmpty()) answer.body else
+                "Some readings could not be refreshed: ${stale.joinToString(", ")}. " +
+                    "Treat this answer as provisional until Data Sources confirms a successful read. " + answer.body,
+            citations = answer.citations.filter { citationAvailable(it, context) }
+        )
+    }
+
+    private fun citationAvailable(citation: String, c: CoachContext): Boolean = when (citation.substringBefore('.')) {
+        "readiness" -> c.readiness?.value != null
+        "sleep" -> c.sleep != null
+        "rhr" -> c.restingHR != null
+        "training_load" -> c.trainingLoad != null
+        "muscle_recovery" -> c.muscleRecovery != null
+        "recommendation" -> c.recommendation != null
+        "forecast" -> c.forecast != null
+        "anomalies" -> c.anomalies.isNotEmpty()
+        "trends" -> c.trends.isNotEmpty()
+        "insights" -> c.insights.isNotEmpty()
+        "journal" -> c.journal != null
+        else -> true
     }
 
     // ── 1. Why am I low? ─────────────────────────────────────────────────────
@@ -78,8 +102,12 @@ object CoachAnswerEngine {
             }
             append(". ")
 
-            if (drags.isEmpty()) {
-                append("No single component is dragging it down; it is the combination rather than one cause. ")
+            if (readiness.breakdown.isEmpty()) {
+                append(readiness.explanation ?: "The saved score has no factor breakdown yet.")
+                append(" ")
+            } else if (drags.isEmpty()) {
+                append(if (v >= 65) "Your recorded readiness is not low. " else
+                    "No recorded component is below 50/100; the score reflects their combination. ")
             } else {
                 append("The biggest drag is ${drags.first().name.lowercase()} at ")
                 append("${drags.first().subScore.roundToInt()}/100 — ${drags.first().description} ")
@@ -90,7 +118,7 @@ object CoachAnswerEngine {
             }
 
             c.restingHR?.let {
-                if (it.deviation.startsWith("+")) {
+                if (it.isAboveBaseline()) {
                     append("Resting heart rate is ${it.deviation} against your ${it.baseline} baseline. ")
                     cited += "rhr"
                 }
@@ -126,6 +154,14 @@ object CoachAnswerEngine {
     // ── 2. What should I train? ──────────────────────────────────────────────
 
     private fun whatShouldITrain(c: CoachContext): Answer {
+        if (c.evidence?.staleMetrics?.isNotEmpty() == true) {
+            return noData(
+                CoachIntent.WHAT_SHOULD_I_TRAIN,
+                "Choose rest or gentle movement while today's readings are incomplete. " +
+                    "Refresh Data Sources before using a saved training recommendation.",
+                c
+            )
+        }
         val rec = c.recommendation
             ?: return noData(
                 CoachIntent.WHAT_SHOULD_I_TRAIN,
@@ -134,6 +170,9 @@ object CoachAnswerEngine {
             )
 
         val body = buildString {
+            if (rec.confidence != "HIGH") {
+                append("Provisional suggestion (${rec.confidence.lowercase()} confidence). ")
+            }
             append("${rec.type}, ${rec.intensity.lowercase()} intensity. ")
             when {
                 rec.volumeAdjustmentPercent <= -30 ->
@@ -206,7 +245,7 @@ object CoachAnswerEngine {
         }
 
         c.restingHR?.let {
-            if (it.deviation.startsWith("+")) {
+            if (it.isAboveBaseline()) {
                 reasons += "your resting heart rate is ${it.deviation} above baseline"
                 cited += "rhr"
             }
@@ -218,16 +257,26 @@ object CoachAnswerEngine {
         }
 
         if (reasons.isEmpty()) {
+            if (c.sleep?.durationMinutes == null || c.restingHR?.baselineDeviation() == null ||
+                c.trainingLoad?.strain == null) {
+                return noData(
+                    CoachIntent.WHY_AM_I_TIRED,
+                    "I don't have enough current sleep, resting heart rate and training readings, " +
+                        "including a resting heart rate baseline, to explain tiredness. " +
+                        "Missing evidence does not mean those signals are normal.",
+                    c
+                )
+            }
             return Answer(
                 intent = CoachIntent.WHY_AM_I_TIRED,
                 headline = "Nothing obvious in your data",
-                body = "Your sleep, training load and resting heart rate all look close to your " +
-                        "normal ranges, so I can't point to a cause in what I can measure. " +
+                body = "The available sleep, training load and resting heart rate readings don't show " +
+                        "one of the patterns this coach checks, so I can't point to a cause in what I can measure. " +
                         "Tiredness has plenty of drivers this app doesn't see — nutrition, hydration, " +
                         "life stress, and plenty besides. Worth monitoring rather than reading anything into.",
                 citations = listOf("sleep", "training_load", "rhr"),
                 followUps = listOf("What should I do tonight?"),
-                hasSufficientData = c.readiness?.value != null
+                hasSufficientData = true
             )
         }
 
@@ -260,13 +309,11 @@ object CoachAnswerEngine {
         }
 
         if (debt > 60 && bedtime != null) {
-            val earlier = (debt / 2).coerceAtMost(90)
-            actions += "Going to bed about $earlier minutes earlier than your usual $bedtime " +
-                    "would start clearing your ${fmtMin(debt)} of sleep debt."
+            actions += "Consider making room for sleep before your usual $bedtime; " +
+                    "your recorded sleep debt is ${fmtMin(debt)}."
             cited += "sleep"
         } else if (bedtime != null) {
-            actions += "Holding your usual $bedtime keeps your sleep timing consistent, which is " +
-                    "the part your data responds to most."
+            actions += "Consider keeping your usual $bedtime to support consistent sleep timing."
             cited += "sleep.consistency"
         }
 
@@ -286,7 +333,10 @@ object CoachAnswerEngine {
             )
         }
 
-        val head = c.forecast?.let { "Tomorrow: ${it.low}–${it.high}" } ?: "Tonight"
+        val head = c.forecast?.let {
+            cited += "forecast"
+            "Tomorrow: ${it.low}–${it.high}"
+        } ?: "Tonight"
 
         return Answer(
             intent = CoachIntent.WHAT_TONIGHT,
@@ -304,7 +354,8 @@ object CoachAnswerEngine {
         val week = c.trends.firstOrNull { it.window.startsWith("7") }
         val fortnight = c.trends.firstOrNull { it.window.startsWith("14") }
 
-        if (week == null || week.direction == "INSUFFICIENT_DATA") {
+        if (week == null || week.direction == "INSUFFICIENT_DATA" ||
+            (c.evidence != null && c.evidence.scoredDaysThisWeek < 5)) {
             return noData(
                 CoachIntent.WEEKLY_REVIEW,
                 "I need at least five scored days in the past week before I can review it.",
@@ -312,8 +363,9 @@ object CoachAnswerEngine {
             )
         }
 
+        val cited = mutableListOf("trends", "sleep", "training_load", "insights")
         val body = buildString {
-            appendLine("RECOVERY")
+            appendLine("RECOVERY AND READINESS")
             append("  ${directionWord(week.direction)}")
             if (week.averageEarlier != null && week.averageRecent != null) {
                 append(" — averaging ${week.averageRecent.roundToInt()}")
@@ -356,12 +408,14 @@ object CoachAnswerEngine {
             appendLine()
             appendLine("NEXT WEEK")
             val nextStep = when {
-                c.recommendation?.recoveryActions?.isNotEmpty() == true ->
+                c.recommendation?.recoveryActions?.isNotEmpty() == true -> {
+                    cited += "recommendation"
                     c.recommendation.recoveryActions.first()
+                }
                 week.direction == "DECLINING" ->
-                    "Prioritise sleep consistency and add a rest day — that combination moves your numbers most."
+                    "Consider keeping sleep timing consistent and making room for a rest day."
                 else ->
-                    "Keep the pattern that produced this week; consistency is doing the work."
+                    "Review which routines felt manageable and aim to keep them consistent."
             }
             append("  $nextStep")
             if (fortnight != null && fortnight.direction != "INSUFFICIENT_DATA" &&
@@ -376,7 +430,7 @@ object CoachAnswerEngine {
             intent = CoachIntent.WEEKLY_REVIEW,
             headline = "Your week: ${directionWord(week.direction)}",
             body = body.trim(),
-            citations = listOf("trends", "sleep", "training_load", "insights"),
+            citations = cited.distinct(),
             followUps = listOf("What should I train today?"),
             hasSufficientData = true
         )
@@ -386,24 +440,38 @@ object CoachAnswerEngine {
 
     private fun overview(c: CoachContext): Answer {
         val r = c.readiness?.value
+        val cited = mutableListOf<String>()
         val body = buildString {
             if (r != null) {
                 append("Readiness ${r.roundToInt()}/100")
                 c.readiness.explanation?.let { append(". $it") }
                 append(" ")
+                cited += "readiness"
             }
-            c.recommendation?.let { append("Suggested today: ${it.type}, ${it.intensity.lowercase()} intensity. ") }
-            c.forecast?.let { append("Tomorrow projects to ${it.low}–${it.high}. ") }
+            if (c.evidence?.staleMetrics?.isNotEmpty() == true) {
+                append("Choose rest or gentle movement until today's readings can be refreshed. ")
+                cited += "confidence"
+            } else {
+                c.recommendation?.let {
+                    append("Suggested today: ${it.type}, ${it.intensity.lowercase()} intensity. ")
+                    cited += "recommendation"
+                }
+            }
+            c.forecast?.let {
+                append("Tomorrow projects to ${it.low}–${it.high}. ")
+                cited += "forecast"
+            }
             if (r == null) {
                 append("I don't have enough of today's data to say much yet. ")
                 append(c.confidence.missing.firstOrNull()?.let { "Missing: $it." } ?: "")
+                cited += "confidence"
             }
         }
         return Answer(
             intent = CoachIntent.FREEFORM,
             headline = "Today at a glance",
             body = body.trim(),
-            citations = listOf("readiness", "recommendation", "forecast"),
+            citations = cited.distinct(),
             followUps = CoachIntent.values()
                 .filter { it != CoachIntent.FREEFORM }
                 .map { it.displayQuestion },
@@ -438,6 +506,12 @@ object CoachAnswerEngine {
         "STABLE" -> "Stable"
         else -> "Not enough data"
     }
+
+    private fun CoachContext.MetricBlock.baselineDeviation(): Float? =
+        deviation.substringBefore(' ').toFloatOrNull()?.takeIf { it.isFinite() }
+
+    private fun CoachContext.MetricBlock.isAboveBaseline(): Boolean =
+        (baselineDeviation() ?: 0f) > 0f
 
     private fun joinNaturally(items: List<String>): String = when (items.size) {
         0 -> ""

@@ -3,7 +3,6 @@ package com.example.vitalcoreai.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.compositeOver
 
 /**
  * Dark-only, and deliberately so: this product is read in bed and mid-workout on
@@ -11,10 +10,10 @@ import androidx.compose.ui.graphics.compositeOver
  * domain-accent semantics that the whole design system is built on.
  */
 private val VitalCoreColorScheme = darkColorScheme(
-    primary              = RecoveryAccent,
+    primary              = OnBackground,
     onPrimary            = OnAccent,
-    primaryContainer     = RecoveryAccent.copy(alpha = Alphas.tintedFill).compositeOver(SurfaceL1),
-    onPrimaryContainer   = RecoveryAccent,
+    primaryContainer     = SurfaceL3,
+    onPrimaryContainer   = OnBackground,
     secondary            = SleepAccent,
     onSecondary          = OnAccent,
     tertiary             = StrainAccent,
@@ -25,7 +24,17 @@ private val VitalCoreColorScheme = darkColorScheme(
     onSurface            = OnBackground,
     surfaceVariant       = SurfaceL2,
     onSurfaceVariant     = OnSurfaceDim,
+    surfaceDim           = Background,
+    surfaceBright        = SurfaceL3,
+    surfaceContainerLowest = Background,
+    surfaceContainerLow  = SurfaceL1,
+    surfaceContainer     = SurfaceL2,
     surfaceContainerHigh = SurfaceL3,
+    surfaceContainerHighest = SurfaceL3,
+    surfaceTint          = OnBackground,
+    inverseSurface       = OnBackground,
+    inverseOnSurface     = Background,
+    inversePrimary       = Background,
     outline              = HairlineColor,
     outlineVariant       = DividerColor,
     error                = AlertRed,

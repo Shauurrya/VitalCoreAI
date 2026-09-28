@@ -1,5 +1,10 @@
 package com.example.vitalcoreai.ui.viewmodel
 
+import android.content.Context
+import android.content.Intent
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.*
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,7 +13,12 @@ import com.example.vitalcoreai.analytics.HRRecoveryCalculator
 import com.example.vitalcoreai.data.db.dao.*
 import com.example.vitalcoreai.data.db.entity.*
 import com.example.vitalcoreai.data.model.RestingHRData
+import com.example.vitalcoreai.data.UserPrefs
+import com.example.vitalcoreai.data.healthconnect.HealthConnectManager
+import com.example.vitalcoreai.data.repository.HealthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -17,6 +27,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import com.example.vitalcoreai.core.time.VitalTime
+import com.example.vitalcoreai.core.time.perDay
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Workout History ViewModel (Part 17 — screen 6)
@@ -376,72 +387,184 @@ class BaselinesViewModel @Inject constructor(
 // Data Sources ViewModel (Part 17 — screen 19)
 // ─────────────────────────────────────────────────────────────────────────────
 
-data class DataSourceItem(
-    val name: String,
-    val description: String,
-    val isConnected: Boolean,
-    val lastSyncTime: String?,
-    val dataTypes: List<String>,
-    val permissionStatus: String
-)
-
 data class DataSourcesState(
     val sources: List<DataSourceItem> = emptyList(),
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val isChecking: Boolean = false,
+    val isSyncing: Boolean = false,
+    val available: Boolean? = null,
+    val connectionLabel: String = "Checking Health Connect",
+    val backgroundAccess: String = "Checking availability",
+    val historyAccess: String = "Checking availability",
+    val message: String? = null,
+    val accessError: String? = null
 )
 
 @HiltViewModel
 class DataSourcesViewModel @Inject constructor(
-    private val syncStateDao: SyncStateDao
+    private val syncStateDao: SyncStateDao,
+    private val healthConnectManager: HealthConnectManager,
+    private val repository: HealthRepository,
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
     private val _state = MutableStateFlow(DataSourcesState())
     val state: StateFlow<DataSourcesState> = _state.asStateFlow()
+    private var savedReads: List<SyncStateEntity> = emptyList()
+    private var granted: Set<String>? = null
+    private var accessChecked = false
+    private var accessRefreshPending = false
+    private var latestMetrics: DailyMetricsEntity? = null
+
+    private data class Metric(
+        val type: kotlin.reflect.KClass<out Record>,
+        val name: String,
+        val expectDaily: Boolean = true
+    )
+
+    private val metrics = listOf(
+        Metric(HeartRateRecord::class, "Heart rate"),
+        Metric(RestingHeartRateRecord::class, "Resting heart rate"),
+        Metric(SleepSessionRecord::class, "Sleep"),
+        Metric(StepsRecord::class, "Steps"),
+        Metric(ExerciseSessionRecord::class, "Workouts", false),
+        Metric(TotalCaloriesBurnedRecord::class, "Total calories"),
+        Metric(ActiveCaloriesBurnedRecord::class, "Active calories"),
+        Metric(DistanceRecord::class, "Distance"),
+        Metric(OxygenSaturationRecord::class, "Blood oxygen"),
+        Metric(HeartRateVariabilityRmssdRecord::class, "Heart rate variability"),
+        Metric(WeightRecord::class, "Weight", false),
+        Metric(BodyFatRecord::class, "Body fat", false),
+        Metric(FloorsClimbedRecord::class, "Floors climbed"),
+        Metric(ElevationGainedRecord::class, "Elevation gained"),
+        Metric(SpeedRecord::class, "Speed", false),
+        Metric(Vo2MaxRecord::class, "VO₂ max", false)
+    )
 
     init {
         viewModelScope.launch {
-            val syncStates = syncStateDao.getAll()
-            val syncMap = syncStates.associateBy { it.recordType }
-            val formatter = DateTimeFormatter.ofPattern("MMM d, h:mm a")
+            syncStateDao.observeAll().collect { reads ->
+                savedReads = reads
+                updateSources()
+            }
+        }
+        viewModelScope.launch {
+            perDay { day -> repository.metricsFrom(day - 30) }
+                .catch { emit(emptyList()) }
+                .collect { metrics ->
+                    latestMetrics = metrics.maxByOrNull { it.dateEpochDay }
+                    updateSources()
+                }
+        }
+        refreshAccess()
+    }
 
-            val sources = listOf(
-                DataSourceItem(
-                    name = "Health Connect",
-                    description = "Android Health Connect API — primary data source",
-                    isConnected = syncStates.isNotEmpty(),
-                    lastSyncTime = syncStates.maxByOrNull { it.lastSuccessfulSyncMs }?.let {
-                        Instant.ofEpochMilli(it.lastSuccessfulSyncMs)
-                            .atZone(VitalTime.zone())
-                            .format(formatter)
-                    },
-                    dataTypes = listOf(
-                        "Heart Rate" + if (syncMap.containsKey("HeartRateRecord")) " ✓" else " ✗",
-                        "Steps" + if (syncMap.containsKey("StepsRecord")) " ✓" else " ✗",
-                        "Sleep" + if (syncMap.containsKey("SleepSessionRecord")) " ✓" else " ✗",
-                        "Exercise" + if (syncMap.containsKey("ExerciseSessionRecord")) " ✓" else " ✗",
-                        "SpO₂" + if (syncMap.containsKey("OxygenSaturationRecord")) " ✓" else " ✗",
-                        "Resting HR" + if (syncMap.containsKey("RestingHeartRateRecord")) " ✓" else " ✗"
-                    ),
-                    permissionStatus = if (syncStates.isNotEmpty()) "Granted" else "Not granted"
-                ),
-                DataSourceItem(
-                    name = "Samsung Galaxy Watch Active2",
-                    description = "Wearable sensor data via Samsung Health → Health Connect",
-                    isConnected = syncStates.isNotEmpty(),
-                    lastSyncTime = null,
-                    dataTypes = listOf("PPG Heart Rate", "Accelerometer Steps", "GPS Workouts", "Sleep Detection"),
-                    permissionStatus = "Via Samsung Health"
-                ),
-                DataSourceItem(
-                    name = "Manual Input",
-                    description = "Daily check-ins, journal entries, workout RPE",
-                    isConnected = true,
-                    lastSyncTime = null,
-                    dataTypes = listOf("Morning Check-In", "Journal / Habits", "RPE / Soreness"),
-                    permissionStatus = "Always available"
+    /** Called on every resume, including a return from the system permission screen. */
+    fun refreshAccess() {
+        if (_state.value.isChecking) {
+            // A permission snapshot already in flight may predate the user's changes.
+            // Coalesce additional resume/read-completion requests into one follow-up.
+            accessRefreshPending = true
+            return
+        }
+        _state.update { it.copy(isChecking = true, accessError = null) }
+        viewModelScope.launch {
+            try {
+                do {
+                    accessRefreshPending = false
+                    checkAccess()
+                } while (accessRefreshPending)
+            } finally {
+                accessChecked = true
+                _state.update { it.copy(isChecking = false) }
+                updateSources()
+            }
+        }
+    }
+
+    private suspend fun checkAccess() {
+        var available: Boolean? = null
+        try {
+            available = healthConnectManager.isAvailable()
+            _state.update { it.copy(available = available) }
+            granted = if (available == true) healthConnectManager.grantedPermissions() else emptySet()
+            val count = metrics.count { HealthPermission.getReadPermission(it.type) in granted.orEmpty() }
+            fun capability(supported: Boolean, permission: String): String = when {
+                available != true -> "Unavailable while Health Connect is unavailable"
+                !supported -> "Not supported on this device"
+                permission in granted.orEmpty() -> "Allowed"
+                else -> "Not allowed · manage in Health Connect"
+            }
+            _state.update {
+                it.copy(
+                    available = available,
+                    connectionLabel = if (available == true) "$count of ${metrics.size} metric permissions allowed" else "Health Connect unavailable",
+                    accessError = null,
+                    backgroundAccess = capability(available == true && healthConnectManager.supportsBackgroundRead(), HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND),
+                    historyAccess = capability(available == true && healthConnectManager.supportsHistoryRead(), HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
                 )
-            )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            granted = null
+            _state.update {
+                it.copy(
+                    available = available,
+                    connectionLabel = "Could not check current access",
+                    backgroundAccess = "Could not check current access",
+                    historyAccess = "Could not check current access",
+                    accessError = "Recheck access or open Health Connect settings."
+                )
+            }
+        }
+    }
 
-            _state.value = DataSourcesState(sources = sources, isLoading = false)
+    private fun updateSources() {
+        val byType = savedReads.associateBy { it.recordType }
+        val rows = metrics.map { metric ->
+            val recordType = metric.type.simpleName.orEmpty()
+            presentDataSource(
+                recordType, metric.name, _state.value.available,
+                granted?.contains(HealthPermission.getReadPermission(metric.type)),
+                byType[recordType], VitalTime.nowMs(), metric.expectDaily, ::sourceAppName
+            ).copy(dataNotes = dataSourceNotes(recordType, latestMetrics))
+        }
+        _state.update { it.copy(sources = rows, isLoading = !accessChecked) }
+    }
+
+    private fun sourceAppName(packageName: String): String = try {
+        val info = context.packageManager.getApplicationInfo(packageName, 0)
+        context.packageManager.getApplicationLabel(info).toString()
+    } catch (_: Exception) {
+        // Android package visibility may hide a label; the recorded origin is still useful.
+        packageName
+    }
+
+    fun readData() {
+        if (_state.value.isSyncing || _state.value.available != true) return
+        _state.update { it.copy(isSyncing = true, message = null) }
+        viewModelScope.launch {
+            try {
+                val result = repository.syncToday(UserPrefs.age(context), UserPrefs.maxHR(context))
+                _state.update { it.copy(message = dataReadMessage(result)) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _state.update { it.copy(message = "The read could not finish. Saved measurements remain available; review the outcomes below and retry.") }
+            } finally {
+                _state.update { it.copy(isSyncing = false) }
+                refreshAccess()
+            }
+        }
+    }
+
+    fun openHealthConnect() {
+        try {
+            val intent = healthConnectManager.getInstallIntent()
+                ?: Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            _state.update { it.copy(message = "Health Connect could not be opened. Check your phone's Settings for Health Connect and app permissions.") }
         }
     }
 }

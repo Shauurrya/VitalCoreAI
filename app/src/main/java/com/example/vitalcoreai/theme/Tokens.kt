@@ -22,10 +22,10 @@ object Spacing {
 
 /** Fixed component sizes. */
 object Sizes {
-    val topBarHeight     = 56.dp
+    val topBarHeight     = 64.dp
     val bottomBarHeight  = 64.dp
     val listRowMinHeight = 64.dp
-    val tileMinHeight    = 84.dp
+    val tileMinHeight    = 96.dp
     val iconSm = 16.dp
     val iconMd = 20.dp
     val iconLg = 24.dp
@@ -49,7 +49,7 @@ object Motion {
 object Alphas {
     const val glow         = 0.20f
     const val tintedFill   = 0.12f   // icon container / badge background
-    const val tintedBorder = 0.30f   // accent hairline
+    const val tintedBorder = 0.22f   // accent hairline
     const val areaFillTop  = 0.28f   // chart gradient top stop
     const val disabled     = 0.38f
     const val pressed      = 0.85f

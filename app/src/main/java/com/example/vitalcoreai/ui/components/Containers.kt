@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -42,7 +43,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.vitalcoreai.coach.CoachEngine
@@ -70,10 +76,8 @@ import com.example.vitalcoreai.analytics.TrendDirection
 // ═══════════════════════════════════════════════════════════════════════════
 // CARD + LAYOUT SYSTEM
 //
-// Elevation doctrine: no Material elevation, no shadows. On a #060A10 page a
-// shadow is invisible and costs a full-screen overdraw pass. Depth comes from
-// exactly three things — a surface step, a 1dp hairline, and an optional 3dp
-// top accent strip.
+// Depth comes from a subtle surface step and a quiet hairline. Colour belongs
+// to the health signals; neutral containers let those signals lead the screen.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -95,21 +99,27 @@ fun VitalCard(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val neutralBorder = HairlineColor.copy(alpha = 0.65f)
     val borderBrush = if (accent != null) {
-        Brush.verticalGradient(listOf(accent.copy(alpha = Alphas.tintedBorder), HairlineColor))
+        Brush.verticalGradient(listOf(accent.copy(alpha = Alphas.tintedBorder), neutralBorder))
     } else {
-        Brush.verticalGradient(listOf(HairlineColor, HairlineColor))
+        Brush.verticalGradient(listOf(HairlineColor, neutralBorder))
     }
 
     Box(
         modifier = modifier
             .clip(shape)
-            .background(surface)
+            .background(
+                Brush.verticalGradient(
+                    listOf(OnBackground.copy(alpha = 0.018f).compositeOver(surface), surface)
+                )
+            )
             .border(width = Sizes.hairline, brush = borderBrush, shape = shape)
             .then(
                 if (onClick != null) Modifier.clickable(
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(color = accent ?: RecoveryAccent),
+                    indication = ripple(color = accent ?: OnBackground),
+                    role = Role.Button,
                     onClick = onClick
                 ) else Modifier
             )
@@ -153,22 +163,23 @@ fun VitalSectionCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title.uppercase(),
-                    style = VitalCoreType.eyebrow,
-                    color = accent
+                    text = title,
+                    style = VitalCoreType.sectionTitle,
+                    color = OnBackground,
+                    modifier = Modifier.semantics { heading() }
                 )
                 if (subtitle != null) {
-                    Spacer(Modifier.height(Spacing.xxs))
+                    Spacer(Modifier.height(Spacing.xs))
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = OnSurfaceMuted
+                        color = OnSurfaceDim
                     )
                 }
             }
             if (trailing != null) trailing()
         }
-        Spacer(Modifier.height(Spacing.md))
+        Spacer(Modifier.height(Spacing.lg))
         content()
     }
 }
@@ -207,8 +218,7 @@ fun VitalListDivider(modifier: Modifier = Modifier) {
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
- * A 3dp × 14dp rounded accent bar, 8dp gap, then the uppercase eyebrow.
- * Replaces the old under-title rule, which was always cyan regardless of domain.
+ * A clear section title with a small domain marker and an optional action.
  */
 @Composable
 fun SectionHeader(
@@ -220,22 +230,21 @@ fun SectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = Spacing.xxl, bottom = 10.dp, start = 2.dp),
+            .padding(top = Spacing.lg, bottom = Spacing.xs, start = Spacing.xxs),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .width(Sizes.accentStrip)
-                .height(14.dp)
+                .size(5.dp)
                 .clip(VitalShapes.Bar)
                 .background(accent)
         )
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = title.uppercase(),
-            style = VitalCoreType.eyebrow,
-            color = OnSurfaceDim,
-            modifier = Modifier.weight(1f)
+            text = title,
+            style = VitalCoreType.sectionTitle,
+            color = OnBackground,
+            modifier = Modifier.weight(1f).semantics { heading() }
         )
         if (action != null) action()
     }
@@ -267,6 +276,7 @@ fun VitalListRow(
                 if (onClick != null && enabled) Modifier.clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = ripple(color = leadingTint),
+                    role = Role.Button,
                     onClick = onClick
                 ) else Modifier
             )
@@ -279,7 +289,7 @@ fun VitalListRow(
                 modifier = Modifier
                     .size(Sizes.leadingIconBox)
                     .clip(VitalShapes.IconBox)
-                    .background(leadingTint.copy(alpha = Alphas.tintedFill)),
+                    .background(leadingTint.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -297,14 +307,15 @@ fun VitalListRow(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = OnBackground,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             if (subtitle != null) {
+                Spacer(Modifier.height(Spacing.xxs))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = OnSurfaceMuted,
+                    color = OnSurfaceDim,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -347,7 +358,7 @@ fun VitalListRow(
 /**
  * The single app bar. Container is [Background] so it merges with the page with no
  * seam; the back arrow is neutral white, never the domain accent. The accent
- * appears only as a 2dp bottom rule that fades out to the right.
+ * is reserved for the data and actions inside the screen.
  */
 @Composable
 fun VitalTopBar(
@@ -389,7 +400,8 @@ fun VitalTopBar(
                     style = MaterialTheme.typography.headlineSmall,
                     color = OnBackground,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { heading() }
                 )
                 if (subtitle != null) {
                     Text(
@@ -405,15 +417,9 @@ fun VitalTopBar(
             actions()
             Spacer(Modifier.width(Spacing.xs))
         }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(2.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(accent.copy(alpha = 0.55f), Color.Transparent)
-                    )
-                )
+        HorizontalDivider(
+            color = DividerColor.copy(alpha = 0.6f),
+            thickness = Sizes.hairline
         )
     }
 }
@@ -436,7 +442,7 @@ fun VitalScreenScaffold(
             contentPadding = PaddingValues(
                 start = Spacing.gutter,
                 end = Spacing.gutter,
-                top = Spacing.sm,
+                top = Spacing.lg,
                 bottom = Spacing.listBottom
             ),
             verticalArrangement = Arrangement.spacedBy(Spacing.cardGap),
@@ -478,33 +484,33 @@ fun MetricTile(
         modifier = modifier.heightIn(min = Sizes.tileMinHeight),
         accent = null,
         shape = VitalShapes.Tile,
-        contentPadding = PaddingValues(14.dp),
+        contentPadding = PaddingValues(Spacing.lg),
         onClick = onClick
     ) {
         Text(
             text = data.label.uppercase(),
             style = VitalCoreType.eyebrow,
             color = OnSurfaceDim,
-            maxLines = 1,
+            maxLines = 2,
+            modifier = Modifier.heightIn(min = 28.dp),
             overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(Spacing.sm))
-        Row(verticalAlignment = Alignment.Bottom) {
+        Text(
+            text = data.value,
+            style = VitalCoreType.metricMedium,
+            color = if (data.value == "—") OnSurfaceMuted else OnBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (!data.unit.isNullOrBlank()) {
+            Spacer(Modifier.height(Spacing.xxs))
             Text(
-                text = data.value,
-                style = VitalCoreType.metricMedium,
-                color = if (data.value == "—") OnSurfaceMuted else accent,
-                maxLines = 1
+                text = data.unit,
+                style = VitalCoreType.metricUnit,
+                color = accent,
+                maxLines = 2
             )
-            if (data.unit != null) {
-                Text(
-                    text = data.unit,
-                    style = VitalCoreType.metricUnit,
-                    color = OnSurfaceMuted,
-                    modifier = Modifier.padding(start = 3.dp, bottom = 3.dp),
-                    maxLines = 1
-                )
-            }
         }
         if (data.delta != null && data.delta.isNotBlank()) {
             Spacer(Modifier.height(Spacing.xs))
@@ -518,8 +524,8 @@ fun MetricTile(
 }
 
 /**
- * 1–3 tiles → one row of equal weights. 4 or more → rows of two: at 360dp width a
- * 4-across tile is 74dp and truncates its own value.
+ * Tiles keep a readable minimum width, including when system text is enlarged.
+ * Compact phones use two columns; wider layouts can fit three summary metrics.
  */
 @Composable
 fun MetricTileRow(
@@ -529,37 +535,29 @@ fun MetricTileRow(
 ) {
     if (tiles.isEmpty()) return
 
-    if (tiles.size <= 3) {
-        Row(
-            modifier = modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-        ) {
-            tiles.forEach { tile ->
-                MetricTile(
-                    data = tile,
-                    modifier = Modifier.weight(1f),
-                    onClick = tile.route?.let { r -> onNavigate?.let { nav -> { nav(r) } } }
-                )
-            }
-        }
-    } else {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val minTileWidth = 128.dp * fontScale.coerceAtLeast(1f)
+        val maximumColumns = if (tiles.size <= 3) tiles.size else 2
+        val columns = ((maxWidth + Spacing.sm) / (minTileWidth + Spacing.sm))
+            .toInt().coerceIn(1, maximumColumns)
         Column(
-            modifier = modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            tiles.chunked(2).forEach { pair ->
+            tiles.chunked(columns).forEach { row ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    pair.forEach { tile ->
+                    row.forEach { tile ->
                         MetricTile(
                             data = tile,
                             modifier = Modifier.weight(1f),
                             onClick = tile.route?.let { r -> onNavigate?.let { nav -> { nav(r) } } }
                         )
                     }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
@@ -604,13 +602,13 @@ fun InsightCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
                     color = OnBackground
                 )
                 Spacer(Modifier.height(Spacing.xs))
                 Text(
                     text = body,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = OnSurfaceDim
                 )
             }

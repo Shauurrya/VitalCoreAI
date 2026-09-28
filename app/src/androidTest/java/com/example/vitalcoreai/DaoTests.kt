@@ -22,10 +22,10 @@ import org.junit.runner.RunWith
  * Each test rebuilds the DB to guarantee isolation.
  *
  * Coverage:
- *  - DailyMetricsDao: insert + getRange + Flow
+ *  - DailyMetricsDao: insert + getRange
  *  - ComputedScoresDao: insert + getLatest + getRange
- *  - AchievementDao: insert + getAll
- *  - SyncStateDao: upsert + getLatestTimestamp
+ *  - AchievementDao: insert + getAllEarned
+ *  - SyncStateDao: upsert + getForType
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -97,7 +97,7 @@ class DaoTests {
         computedScoresDao.upsert(buildScores(19901L, recovery = 75f))
         computedScoresDao.upsert(buildScores(19899L, recovery = 50f))
 
-        val latest = computedScoresDao.getLatest()
+        val latest = computedScoresDao.getLatest().first()
         assertNotNull(latest)
         assertEquals(75f, latest!!.recoveryScore)
         assertEquals(19901L, latest.dateEpochDay)
@@ -107,7 +107,7 @@ class DaoTests {
     fun computedScores_flowEmitsOnInsert() = runTest {
         computedScoresDao.upsert(buildScores(19900L, recovery = 82f))
 
-        val from19900 = computedScoresDao.getLatestFlow().first()
+        val from19900 = computedScoresDao.getLatest().first()
         assertNotNull(from19900)
         assertEquals(82f, from19900!!.recoveryScore)
     }
@@ -127,43 +127,44 @@ class DaoTests {
 
     @Test
     fun achievement_insertAndGetAll() = runTest {
-        val a1 = AchievementEntity(id = "streak_7", title = "7-Day Streak", description = "7 days active", earnedAt = 19900L)
-        val a2 = AchievementEntity(id = "best_recovery", title = "Best Recovery", description = "Personal best", earnedAt = 19901L)
+        val a1 = AchievementEntity(achievementId = "streak_7", title = "7-Day Streak", description = "7 days active", icon = "fire", earnedEpochDay = 19900L)
+        val a2 = AchievementEntity(achievementId = "best_recovery", title = "Best Recovery", description = "Personal best", icon = "star", earnedEpochDay = 19901L)
 
-        achievementDao.upsert(a1)
-        achievementDao.upsert(a2)
+        achievementDao.insert(a1)
+        achievementDao.insert(a2)
 
-        val all = achievementDao.getAll().first()
+        val all = achievementDao.getAllEarned().first()
         assertEquals(2, all.size)
-        assertTrue(all.any { it.id == "streak_7" })
-        assertTrue(all.any { it.id == "best_recovery" })
+        assertTrue(all.any { it.achievementId == "streak_7" })
+        assertTrue(all.any { it.achievementId == "best_recovery" })
     }
 
     @Test
-    fun achievement_upsertIsIdempotent() = runTest {
-        val ach = AchievementEntity(id = "streak_7", title = "7-Day Streak", description = "7 days", earnedAt = 19900L)
-        achievementDao.upsert(ach)
-        achievementDao.upsert(ach) // duplicate upsert
+    fun achievement_insertIgnoresDuplicateAchievementId() = runTest {
+        val ach = AchievementEntity(achievementId = "streak_7", title = "7-Day Streak", description = "7 days", icon = "fire", earnedEpochDay = 19900L)
+        achievementDao.insert(ach)
+        achievementDao.insert(ach.copy(earnedEpochDay = 19901L))
 
-        val all = achievementDao.getAll().first()
-        assertEquals("Duplicate upsert should not create duplicate rows", 1, all.size)
+        val all = achievementDao.getAllEarned().first()
+        assertEquals("Duplicate achievement IDs should not create duplicate rows", 1, all.size)
+        assertEquals("The original earned date should be preserved", 19900L, all.single().earnedEpochDay)
     }
 
     // ── SyncStateDao ──────────────────────────────────────────────────────────
 
     @Test
     fun syncState_upsertAndRetrieve() = runTest {
-        val state = SyncStateEntity(recordType = "HeartRateRecord", latestSyncedTimestamp = 1700000000000L)
+        val state = SyncStateEntity(recordType = "HeartRateRecord", lastSyncTimestampMs = 1700000000000L)
         syncStateDao.upsert(state)
 
-        val ts = syncStateDao.getLatestTimestamp("HeartRateRecord")
+        val ts = syncStateDao.getForType("HeartRateRecord")?.lastSyncTimestampMs
         assertEquals(1700000000000L, ts)
     }
 
     @Test
     fun syncState_returnsNullForUnknownType() = runTest {
-        val ts = syncStateDao.getLatestTimestamp("UnknownRecord")
-        assertNull("Should return null for unknown record type", ts)
+        val state = syncStateDao.getForType("UnknownRecord")
+        assertNull("Should return null for unknown record type", state)
     }
 
     @Test
@@ -171,7 +172,7 @@ class DaoTests {
         syncStateDao.upsert(SyncStateEntity("HR", 1000L))
         syncStateDao.upsert(SyncStateEntity("HR", 9999L))
 
-        val ts = syncStateDao.getLatestTimestamp("HR")
+        val ts = syncStateDao.getForType("HR")?.lastSyncTimestampMs
         assertEquals(9999L, ts)
     }
 

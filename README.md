@@ -37,6 +37,14 @@ You can download the pre-compiled Android APK directly using the link below:
 - **💪 Muscle recovery that learns**: per-group recovery times derived from the gaps you actually take, excluding cycles that followed a high soreness report.
 - **🔐 Optional biometric lock**, **🚀 nine-step onboarding**, and a hidden **developer screen** (triple-tap the title, debug builds only) with nine deterministic 30-day scenarios and a live preview of the AI-context payload.
 
+### Daily guidance (local development build)
+
+- **Ask Coach** answers five supported questions offline, with dated evidence, confidence and links to the relevant readings.
+- **Daily action plan** lets you choose activity or rest, adjust a sleep target, save or complete actions, and return to an existing check-in. Choices persist separately for each day.
+- **Reliable refresh feedback** distinguishes empty reads, permission problems and failed reads, retains failed readings as stale, and shows current access and measurement freshness in Data Sources.
+
+See [the implementation and validation handoff](docs/DAILY_GUIDANCE_HANDOFF.md) for this build's scope and remaining device checks. The published APK linked above predates these changes.
+
 ---
 
 ## 🛠️ Technology Stack

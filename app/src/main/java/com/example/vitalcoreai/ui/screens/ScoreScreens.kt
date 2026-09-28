@@ -1,13 +1,10 @@
 package com.example.vitalcoreai.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,9 +12,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.vitalcoreai.analytics.*
@@ -25,99 +22,100 @@ import com.example.vitalcoreai.theme.*
 import com.example.vitalcoreai.ui.components.*
 import com.example.vitalcoreai.ui.viewmodel.*
 
-// ─── Shared Score Detail Screen template ─────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ScoreDetailScreen(
+internal fun ScoreDetailScreen(
     title: String,
     state: ScoreDetailUiState,
-    chartColor: androidx.compose.ui.graphics.Color = RecoveryAccent,
+    chartColor: Color = RecoveryAccent,
     onBack: () -> Unit
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = RecoveryAccent)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background)
-            )
-        },
-        containerColor = Background
-    ) { padding ->
+    val isStress = title == "Stress"
+    val scoreAccent = if (isStress) stressTierColor(state.score) else chartColor
+
+    VitalScreenScaffold(
+        topBar = { VitalTopBar(title = title, subtitle = "Your daily performance", accent = chartColor, onBack = onBack) }
+    ) {
         if (state.isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = RecoveryAccent, strokeWidth = 2.dp)
-            }
-            return@Scaffold
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Big ring + confidence
+            item { ScoreLoading() }
+        } else {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    PercentRing(
-                        value = state.score,
-                        label = title.uppercase(),
-                        size = 150.dp
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        state.score?.let {
-                            Text(
-                                "${it.toInt()} / 100",
-                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = recoveryTierColor(it)
-                            )
-                        } ?: Text("No data", style = MaterialTheme.typography.headlineMedium, color = OnSurfaceMuted)
-                        ConfidenceBadge(state.confidence)
-                        TrendArrow(state.trendDirection)
-                    }
-                }
+                ScoreHero(
+                    title = title,
+                    state = state,
+                    accent = scoreAccent,
+                    useTierColors = title == "Recovery",
+                    caption = if (isStress) stressTierLabel(state.score) else null,
+                    higherIsBetter = !isStress
+                )
             }
-
-            // Explanation
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Explanation", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                        Spacer(Modifier.height(6.dp))
-                        Text(state.explanation, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
-                    }
-                }
-            }
-
-            // Chart
+            item { ScoreInsight(state.explanation, chartColor) }
             if (state.chartValues.isNotEmpty()) {
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("14-Day Trend", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                            Spacer(Modifier.height(8.dp))
-                            TrendLineChart(values = state.chartValues, accent = chartColor)
-                        }
-                    }
-                }
+                item { ScoreHistory(state.chartValues, chartColor) }
             }
-
-            // Breakdown
             if (state.breakdown.isNotEmpty()) {
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Score Breakdown", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                            Spacer(Modifier.height(8.dp))
-                            state.breakdown.forEach { factor ->
-                                BreakdownRow(factor = factor)
-                                HorizontalDivider(color = SurfaceL3, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
-                            }
-                        }
+                item { ScoreBreakdown(state.breakdown, chartColor, higherIsBetter = !isStress) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScoreHero(
+    title: String,
+    state: ScoreDetailUiState,
+    accent: Color,
+    useTierColors: Boolean = false,
+    caption: String? = null,
+    higherIsBetter: Boolean = true
+) {
+    VitalCard(
+        modifier = Modifier.fillMaxWidth(),
+        accent = accent,
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(accent.copy(alpha = 0.07f), Color.Transparent)))
+                .padding(horizontal = 20.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("LATEST SCORE", style = VitalCoreType.eyebrow, color = OnSurfaceDim, modifier = Modifier.weight(1f))
+                Text("0–100", style = VitalCoreType.monoTiny, color = OnSurfaceMuted)
+            }
+            Spacer(Modifier.height(24.dp))
+            PercentRing(
+                value = state.score,
+                label = title,
+                size = 220.dp,
+                strokeWidth = 13.dp,
+                accent = accent,
+                useTierColors = useTierColors,
+                caption = caption
+            )
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(color = HairlineColor)
+            Spacer(Modifier.height(16.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ConfidenceBadge(state.confidence)
+                if (state.chartValues.size > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TrendArrow(state.trendDirection, higherIsBetter = higherIsBetter)
+                        Text(
+                            text = when (state.trendDirection) {
+                                TrendDirection.UP -> "Trending up"
+                                TrendDirection.DOWN -> "Trending down"
+                                TrendDirection.NEUTRAL -> "Steady"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OnSurfaceDim
+                        )
                     }
                 }
             }
@@ -125,7 +123,58 @@ private fun ScoreDetailScreen(
     }
 }
 
-// ─── Individual Screen Composables ───────────────────────────────────────────
+@Composable
+private fun ScoreInsight(explanation: String, accent: Color) {
+    VitalSectionCard(title = "What this means", accent = accent, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = explanation,
+            style = MaterialTheme.typography.bodyLarge,
+            color = OnBackground
+        )
+    }
+}
+
+@Composable
+private fun ScoreHistory(values: List<Float>, accent: Color) {
+    VitalSectionCard(
+        title = "Score history",
+        subtitle = "Latest ${values.size} recorded scores · out of 100",
+        accent = accent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Spacer(Modifier.height(6.dp))
+        TrendLineChart(values = values, accent = accent, yRange = 0f..100f, height = 172.dp)
+    }
+}
+
+@Composable
+private fun ScoreBreakdown(factors: List<ScoreFactor>, accent: Color, higherIsBetter: Boolean = true) {
+    VitalSectionCard(
+        title = "Behind your score",
+        subtitle = "Your contributing factors",
+        accent = accent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        factors.forEachIndexed { index, factor ->
+            BreakdownRow(
+                factor = factor,
+                accent = accent,
+                scoreColor = if (higherIsBetter) recoveryTierColor(factor.score) else stressTierColor(factor.score)
+            )
+            if (index < factors.lastIndex) {
+                HorizontalDivider(color = DividerColor, modifier = Modifier.padding(vertical = 8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScoreLoading() {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        VitalSkeleton(Modifier.fillMaxWidth().height(360.dp))
+        VitalSkeleton(Modifier.fillMaxWidth().height(120.dp))
+    }
+}
 
 @Composable
 fun RecoveryScreen(
@@ -142,10 +191,9 @@ fun ReadinessScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    ScoreDetailScreen("Readiness", state, RecoveryAccent, onBack)
+    ScoreDetailScreen("Readiness", state, ReadinessAccent, onBack)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SleepScreen(
     viewModel: SleepViewModel = hiltViewModel(),
@@ -154,166 +202,84 @@ fun SleepScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val sleepDebt by viewModel.sleepDebt.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Sleep", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = RecoveryAccent) } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background)
-            )
-        },
-        containerColor = Background
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Score ring
+    VitalScreenScaffold(
+        topBar = { VitalTopBar(title = "Sleep", subtitle = "Rest, recharge, repeat", accent = SleepAccent, onBack = onBack) }
+    ) {
+        if (state.isLoading) {
+            item { ScoreLoading() }
+        } else {
+            item { ScoreHero(title = "Sleep", state = state, accent = SleepAccent) }
+            item { ScoreInsight(state.explanation, SleepAccent) }
             item {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    PercentRing(
-                        value = state.score,
-                        label = "SLEEP",
-                        size = 160.dp,
-                        strokeWidth = 12.dp,
-                        accent = SleepAccent
-                    )
-                }
-            }
-
-            // Confidence badge
-            item {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    ConfidenceBadge(state.confidence)
-                }
-            }
-
-            // Explanation
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Explanation", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                        Spacer(Modifier.height(6.dp))
-                        Text(state.explanation, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
-                    }
-                }
-            }
-
-            // Chart
-            if (state.chartValues.isNotEmpty()) {
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("14-Day Sleep Score", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                            Spacer(Modifier.height(8.dp))
-                            TrendLineChart(values = state.chartValues, accent = SleepAccent)
-                        }
-                    }
-                }
-            }
-
-            // Breakdown
-            if (state.breakdown.isNotEmpty()) {
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("Score Breakdown", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                            Spacer(Modifier.height(8.dp))
-                            state.breakdown.forEach { factor ->
-                                BreakdownRow(factor = factor)
-                                HorizontalDivider(color = SurfaceL3, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── Part 10: Sleep Debt Section ──────────────────────────────
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SurfaceL1),
-                    shape = MaterialTheme.shapes.large,
-                    border = BorderStroke(
-                        width = 1.dp,
-                        brush = Brush.verticalGradient(listOf(SleepAccent.copy(0.3f), DividerColor))
-                    )
+                VitalSectionCard(
+                    title = "Sleep balance",
+                    subtitle = "Your need, rest, and accumulated debt",
+                    accent = SleepAccent,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            "SLEEP DEBT",
-                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp),
-                            color = SleepAccent
+                    DetailMetricPair(first = { cellModifier ->
+                        SleepDebtCard(
+                            label = "Recommended",
+                            value = "${sleepDebt.recommendedHours}h ${sleepDebt.recommendedMinutesRemainder}m",
+                            color = SleepAccent,
+                            modifier = cellModifier
                         )
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SleepDebtCard(
-                                label = "Recommended",
-                                value = "${sleepDebt.recommendedHours}h ${sleepDebt.recommendedMinutesRemainder}m",
-                                color = SleepAccent,
-                                modifier = Modifier.weight(1f)
-                            )
-                            SleepDebtCard(
-                                label = "Last Night",
-                                value = if (sleepDebt.lastNightMinutes != null)
-                                    "${sleepDebt.lastNightMinutes!! / 60}h ${sleepDebt.lastNightMinutes!! % 60}m" else "—",
-                                color = if (sleepDebt.dailyDeficit > 0) AlertRed else ActivityAccent,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SleepDebtCard(
-                                label = "Daily Deficit",
-                                value = if (sleepDebt.dailyDeficit > 0)
-                                    "-${sleepDebt.dailyDeficit / 60}h ${sleepDebt.dailyDeficit % 60}m"
-                                else "+${(-sleepDebt.dailyDeficit) / 60}h ${(-sleepDebt.dailyDeficit) % 60}m",
-                                color = if (sleepDebt.dailyDeficit > 0) AlertRed else ActivityAccent,
-                                modifier = Modifier.weight(1f)
-                            )
-                            SleepDebtCard(
-                                label = "7-Day Debt",
-                                value = "${sleepDebt.rollingDebtMinutes / 60}h ${sleepDebt.rollingDebtMinutes % 60}m",
-                                color = when {
-                                    sleepDebt.rollingDebtMinutes > 300 -> AlertRed
-                                    sleepDebt.rollingDebtMinutes > 120 -> StressAccent
-                                    else -> ActivityAccent
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            sleepDebt.recommendation,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = OnSurfaceDim
+                    }, second = { cellModifier ->
+                        SleepDebtCard(
+                            label = "Last night",
+                            value = sleepDebt.lastNightMinutes?.let { "${it / 60}h ${it % 60}m" } ?: "—",
+                            color = if (sleepDebt.dailyDeficit > 0) StressAccent else SleepAccent,
+                            modifier = cellModifier
                         )
-                    }
+                    })
+                    Spacer(Modifier.height(10.dp))
+                    DetailMetricPair(first = { cellModifier ->
+                        SleepDebtCard(
+                            label = "Daily deficit",
+                            value = if (sleepDebt.lastNightMinutes == null) "—"
+                            else if (sleepDebt.dailyDeficit > 0)
+                                "−${sleepDebt.dailyDeficit / 60}h ${sleepDebt.dailyDeficit % 60}m"
+                            else "+${(-sleepDebt.dailyDeficit) / 60}h ${(-sleepDebt.dailyDeficit) % 60}m",
+                            color = if (sleepDebt.dailyDeficit > 0) StressAccent else ActivityAccent,
+                            modifier = cellModifier
+                        )
+                    }, second = { cellModifier ->
+                        SleepDebtCard(
+                            label = "7-day debt",
+                            value = "${sleepDebt.rollingDebtMinutes / 60}h ${sleepDebt.rollingDebtMinutes % 60}m",
+                            color = when {
+                                sleepDebt.rollingDebtMinutes > 300 -> AlertRed
+                                sleepDebt.rollingDebtMinutes > 120 -> StressAccent
+                                else -> ActivityAccent
+                            },
+                            modifier = cellModifier
+                        )
+                    })
+                    Spacer(Modifier.height(18.dp))
+                    Text(sleepDebt.recommendation, style = MaterialTheme.typography.bodyMedium, color = OnSurfaceDim)
                 }
             }
-
-            item { Spacer(Modifier.height(24.dp)) }
+            if (state.chartValues.isNotEmpty()) {
+                item { ScoreHistory(state.chartValues, SleepAccent) }
+            }
+            if (state.breakdown.isNotEmpty()) {
+                item { ScoreBreakdown(state.breakdown, SleepAccent) }
+            }
         }
     }
 }
 
 @Composable
 private fun SleepDebtCard(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Box(
+    Column(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(color.copy(alpha = 0.08f))
-            .padding(12.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(SurfaceL2.copy(alpha = 0.7f))
+            .padding(horizontal = 14.dp, vertical = 16.dp)
     ) {
-        Column {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceDim)
-            Spacer(Modifier.height(4.dp))
-            Text(value, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = color)
-        }
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = OnSurfaceDim)
+        Spacer(Modifier.height(10.dp))
+        Text(value, style = VitalCoreType.metricSmall, color = color)
     }
 }
 
@@ -326,9 +292,7 @@ fun StressScreen(
     ScoreDetailScreen("Stress", state, StressAccent, onBack)
 }
 
-// ─── Heart Screen (custom layout) ────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HeartScreen(
     viewModel: HeartViewModel = hiltViewModel(),
@@ -336,47 +300,67 @@ fun HeartScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Heart Rate", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = RecoveryAccent) } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background)
-            )
-        },
-        containerColor = Background
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+    VitalScreenScaffold(
+        topBar = { VitalTopBar(title = "Heart rate", subtitle = "Know your baseline", accent = HeartAccent, onBack = onBack) }
+    ) {
+        if (state.isLoading) {
+            item { ScoreLoading() }
+        } else {
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    MetricStatCard("Resting HR Today", state.restingHR?.toString() ?: "—", "bpm", Modifier.weight(1f))
-                    MetricStatCard("7-Day Avg", state.avgHR7Day?.let { "${it.toInt()}" } ?: "—", "bpm", Modifier.weight(1f))
-                    MetricStatCard("30-Day Avg", state.avgHR30Day?.let { "${it.toInt()}" } ?: "—", "bpm", Modifier.weight(1f))
+                VitalCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    accent = HeartAccent,
+                    contentPadding = PaddingValues(24.dp)
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("RESTING HEART RATE", style = VitalCoreType.eyebrow, color = OnSurfaceDim, modifier = Modifier.weight(1f))
+                        Icon(Icons.Outlined.FavoriteBorder, contentDescription = null, tint = HeartAccent, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.height(28.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(state.restingHR?.toString() ?: "—", style = VitalCoreType.metricHero, color = OnBackground, modifier = Modifier.alignByBaseline())
+                        Text("bpm", style = VitalCoreType.metricUnit, color = HeartAccent, modifier = Modifier.alignByBaseline())
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (state.restingHR != null) "Latest resting measurement" else "No measurement yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceDim,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(16.dp))
                 }
+            }
+            item {
+                DetailMetricPair(
+                    first = { MetricStatCard("7-day average", state.avgHR7Day?.let { "${it.toInt()}" } ?: "—", "bpm", it) },
+                    second = { MetricStatCard("30-day average", state.avgHR30Day?.let { "${it.toInt()}" } ?: "—", "bpm", it) }
+                )
             }
             if (state.chartValues.isNotEmpty()) {
                 item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("30-Day Resting HR", style = MaterialTheme.typography.titleSmall, color = OnSurfaceDim)
-                            Spacer(Modifier.height(8.dp))
-                            TrendLineChart(values = state.chartValues, accent = AlertRed)
-                        }
+                    VitalSectionCard(
+                        title = "Resting heart rate",
+                        subtitle = "Latest ${state.chartValues.size} recorded values · bpm",
+                        accent = HeartAccent,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        TrendLineChart(values = state.chartValues, accent = HeartAccent, height = 180.dp)
                     }
                 }
             }
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = SurfaceL1), shape = MaterialTheme.shapes.large) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            "ℹ️ HR zones, trends, and training load analysis are shown on the Training and Activity screens.",
-                            style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim
-                        )
-                    }
+                VitalSectionCard(title = "Your heart in context", accent = HeartAccent, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Explore heart rate zones, trends, and training load on the Training and Activity screens.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OnSurfaceDim
+                    )
                 }
             }
         }
@@ -384,16 +368,47 @@ fun HeartScreen(
 }
 
 @Composable
-internal fun MetricStatCard(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier, colors = CardDefaults.cardColors(containerColor = SurfaceL1),
-        shape = MaterialTheme.shapes.large
-    ) {
-        Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceDim, maxLines = 2)
-            Spacer(Modifier.height(4.dp))
-            Text(value, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = AlertRed)
-            Text(unit, style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted)
+internal fun DetailMetricPair(
+    first: @Composable (Modifier) -> Unit,
+    second: @Composable (Modifier) -> Unit
+) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 280.dp * fontScale) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                first(Modifier.fillMaxWidth())
+                second(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                first(Modifier.weight(1f))
+                second(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun MetricStatCard(
+    label: String,
+    value: String,
+    unit: String,
+    modifier: Modifier = Modifier,
+    accent: Color = OnBackground
+) {
+    VitalCard(modifier = modifier, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                label.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = OnSurfaceDim
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(value, style = VitalCoreType.metricMedium, color = accent)
+            if (unit.isNotEmpty()) {
+                Spacer(Modifier.height(3.dp))
+                Text(unit, style = VitalCoreType.metricUnit, color = OnSurfaceMuted)
+            }
         }
     }
 }

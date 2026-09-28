@@ -108,8 +108,28 @@ object Migrations {
         }
     }
 
+    /** v8 retains cached readings and records the result of each independent read. */
+    val MIGRATION_7_8_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE daily_metrics ADD COLUMN staleRecordTypes TEXT",
+        "ALTER TABLE sync_state ADD COLUMN outcome TEXT",
+        "ALTER TABLE sync_state ADD COLUMN lastSuccessfulReadMs INTEGER",
+        "ALTER TABLE sync_state ADD COLUMN latestMeasurementMs INTEGER",
+        "ALTER TABLE sync_state ADD COLUMN sourcePackages TEXT",
+        "ALTER TABLE sync_state ADD COLUMN recordCount INTEGER",
+        "ALTER TABLE sync_state ADD COLUMN errorMessage TEXT",
+        "ALTER TABLE computed_scores ADD COLUMN recommendationConfidence TEXT",
+        "ALTER TABLE computed_scores ADD COLUMN recommendationRationale TEXT",
+        "ALTER TABLE computed_scores ADD COLUMN recommendationAlternative TEXT"
+    )
+
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            MIGRATION_7_8_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
     /** Every migration, in order. Registered by `DatabaseModule`. */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7)
+    val ALL: Array<Migration> = arrayOf(MIGRATION_6_7, MIGRATION_7_8)
 
     /**
      * Schema versions that may still be wiped rather than migrated.

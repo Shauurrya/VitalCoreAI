@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 import com.example.vitalcoreai.core.time.VitalTime
+import kotlinx.coroutines.CancellationException
 
 /**
  * B4/B6 — Primary Health Connect sync + score computation worker.
@@ -45,12 +46,24 @@ class SyncWorker @AssistedInject constructor(
             val userAge   = inputData.getInt(KEY_USER_AGE, 30)
             val userMaxHR = inputData.getInt(KEY_USER_MAX_HR, 190)
             val syncResult = repository.syncToday(userAge, userMaxHR)
-            sendNotificationsIfEnabled(syncResult, userAge)
-            Result.success()
+            when {
+                syncResult.retryableFailure -> retryOrFail()
+                !syncResult.successful -> Result.failure(workDataOf("sync_status" to "unavailable_or_denied"))
+                syncResult.partial -> Result.success(workDataOf("sync_status" to "partial"))
+                else -> {
+                    sendNotificationsIfEnabled(syncResult, userAge)
+                    Result.success(workDataOf("sync_status" to "complete"))
+                }
+            }
         } catch (e: Exception) {
-            if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.failure()
+            if (e is CancellationException) throw e
+            retryOrFail()
         }
     }
+
+    private fun retryOrFail(): Result =
+        if (runAttemptCount < MAX_RETRIES) Result.retry()
+        else Result.failure(workDataOf("sync_status" to "read_failed"))
 
     /**
      * B3/B4 — Fires local notifications for this sync's results, each gated on its own

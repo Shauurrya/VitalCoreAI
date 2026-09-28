@@ -1,6 +1,11 @@
 package com.example.vitalcoreai.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -21,6 +26,7 @@ object Routes {
     const val TRAINING         = "training"
     const val BIOLOGICAL_AGE   = "biological_age"
     const val INSIGHTS         = "insights"
+    const val ASK_COACH        = "ask_coach"
     const val HISTORY          = "history"
     const val WEEKLY_REPORT    = "weekly_report"
     const val MONTHLY_REPORT   = "monthly_report"
@@ -36,10 +42,15 @@ object Routes {
     const val DATA_SOURCES     = "data_sources"       // Part 21 / Part 17 #19
     const val FORECAST         = "forecast"           // T-13 — tomorrow's readiness range
     const val DEBUG            = "debug"              // T-14 — developer screen
+    const val DAY_DETAIL       = "day_detail"         // History card tap — per-day detail
 
     /** Workout Detail is the only route that carries an argument. */
     const val WORKOUT_DETAIL_ARG = "sessionStartMs"
     fun workoutDetail(sessionStartMs: Long) = "$WORKOUT_DETAIL/$sessionStartMs"
+
+    /** Per-day history detail argument. */
+    const val DAY_DETAIL_ARG = "epochDay"
+    fun dayDetail(epochDay: Long) = "$DAY_DETAIL/$epochDay"
 }
 
 @Composable
@@ -48,7 +59,14 @@ fun VitalCoreNavGraph(
     healthConnectManager: HealthConnectManager,
     startDestination: String = Routes.ONBOARDING
 ) {
-    NavHost(navController = navController, startDestination = startDestination) {
+    NavHost(
+        navController = navController,
+        startDestination = startDestination,
+        enterTransition = { fadeIn(tween(240)) + slideInHorizontally(tween(240)) { it / 14 } },
+        exitTransition = { fadeOut(tween(160)) },
+        popEnterTransition = { fadeIn(tween(220)) },
+        popExitTransition = { fadeOut(tween(180)) + slideOutHorizontally(tween(180)) { it / 14 } }
+    ) {
 
         composable(Routes.ONBOARDING) {
             OnboardingScreen(
@@ -101,8 +119,20 @@ fun VitalCoreNavGraph(
             InsightsScreen(onBack = { navController.popBackStack() })
         }
 
+        composable(Routes.ASK_COACH) {
+            AskCoachScreen(
+                onBack = { navController.popBackStack() },
+                onNavigate = { route -> navController.navigate(route) }
+            )
+        }
+
         composable(Routes.HISTORY) {
-            HistoryScreen(onBack = { navController.popBackStack() })
+            HistoryScreen(
+                onBack = { navController.popBackStack() },
+                onDayClick = { epochDay ->
+                    navController.navigate(Routes.dayDetail(epochDay))
+                }
+            )
         }
 
         composable(Routes.WEEKLY_REPORT) {
@@ -181,6 +211,16 @@ fun VitalCoreNavGraph(
         // one, and the only way to reach it is a gesture guarded by BuildConfig.DEBUG.
         composable(Routes.DEBUG) {
             DebugScreen(onBack = { navController.popBackStack() })
+        }
+
+        // History card tap — per-day detail screen
+        composable(
+            route = "${Routes.DAY_DETAIL}/{${Routes.DAY_DETAIL_ARG}}",
+            arguments = listOf(
+                navArgument(Routes.DAY_DETAIL_ARG) { type = NavType.LongType }
+            )
+        ) {
+            DayDetailScreen(onBack = { navController.popBackStack() })
         }
     }
 }

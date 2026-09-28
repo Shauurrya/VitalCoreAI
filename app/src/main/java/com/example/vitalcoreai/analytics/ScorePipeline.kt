@@ -226,6 +226,9 @@ object ScorePipeline {
         val recommendationIntensity: String? = null,
         val recommendationVolumePct: Int? = null,
         val recommendationDetail: String? = null,
+        val recommendationConfidence: String? = null,
+        val recommendationRationale: String? = null,
+        val recommendationAlternative: String? = null,
         val dataQualityFactors: String? = null,
         val dataQualityPositives: String? = null,
 
@@ -811,6 +814,9 @@ object ScorePipeline {
             recommendationIntensity = recommendation.intensity.displayName,
             recommendationVolumePct = recommendation.volumeAdjustmentPercent,
             recommendationDetail = recommendation.detail,
+            recommendationConfidence = recommendation.confidence.name,
+            recommendationRationale = encodeTextList(recommendation.rationale),
+            recommendationAlternative = recommendation.alternativeType?.displayName,
             dataQualityFactors = encodeQualityFactors(quality.factors),
             dataQualityPositives = encodeTextList(quality.positives),
 

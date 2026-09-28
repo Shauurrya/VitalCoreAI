@@ -8,11 +8,18 @@ import com.example.vitalcoreai.data.db.dao.*
 import com.example.vitalcoreai.data.db.entity.*
 import com.example.vitalcoreai.data.UserPrefs
 import com.example.vitalcoreai.data.healthconnect.HealthConnectManager
+import com.example.vitalcoreai.data.healthconnect.RestingHRResult
 import com.example.vitalcoreai.data.model.*
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.health.connect.client.records.*
+import androidx.room.withTransaction
+import com.example.vitalcoreai.data.db.VitalCoreDatabase
+import kotlinx.coroutines.CancellationException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,12 +39,14 @@ class HealthRepository @Inject constructor(
     private val syncStateDao: SyncStateDao,               // B6
     private val checkInDao: CheckInDao,                   // Part 12
     private val journalDao: JournalDao,                   // Part 13
-    private val muscleRecoveryDao: MuscleRecoveryDao      // Part 9
+    private val muscleRecoveryDao: MuscleRecoveryDao,      // Part 9
+    private val database: VitalCoreDatabase
 ) {
     private val prefs: SharedPreferences by lazy {
         context.getSharedPreferences("vitalcore_sync", Context.MODE_PRIVATE)
     }
     private val PREF_BACKFILL_DONE = "backfill_done_v1"
+    private val daySyncMutex = Mutex()
 
     companion object {
         /** How far back the one-time backfill reaches. */
@@ -104,49 +113,90 @@ class HealthRepository @Inject constructor(
     /** Result of a foreground [syncToday] call — used by [com.example.vitalcoreai.data.sync.SyncWorker] to decide which notifications to fire. */
     data class SyncResult(
         val latestScores: ComputedScoresEntity?,
-        val newAchievements: List<AchievementEngine.Achievement>
+        val newAchievements: List<AchievementEngine.Achievement>,
+        val successful: Boolean = true,
+        val partial: Boolean = false,
+        val unavailable: Boolean = false,
+        val retryableFailure: Boolean = false
     )
+
+    data class BackfillResult(
+        val refreshedDays: Int = 0,
+        val skippedDays: Int = 0,
+        val failedDays: Int = 0,
+        val unavailable: Boolean = false,
+        val partialDays: Int = 0,
+        val retryableFailure: Boolean = false
+    )
+
+    data class DaySyncResult(
+        val newAchievements: List<AchievementEngine.Achievement> = emptyList(),
+        val outcomes: List<HealthReadOutcome<*>> = emptyList(),
+        val unavailable: Boolean = false
+    ) {
+        val successful: Boolean get() = !unavailable && outcomes.any { it.successful }
+        val partial: Boolean get() = successful && outcomes.any { !it.successful }
+        val retryableFailure: Boolean get() = outcomes.any { it.status == ReadOutcomeStatus.FAILED }
+    }
 
     // ─── Sync from Health Connect → Room ─────────────────────────────────
 
     suspend fun syncToday(userAge: Int = 30, userMaxHR: Int = 190): SyncResult {
+        if (!healthConnectManager.isAvailable()) return SyncResult(null, emptyList(), successful = false, unavailable = true)
         val today = VitalTime.today()
+        var historyNeedsAttention = false
+        var retryableFailure = false
 
         if (!prefs.getBoolean(PREF_BACKFILL_DONE, false)) {
-            backfillHistory(userAge, userMaxHR)
+            val history = backfillHistory(userAge, userMaxHR)
+            historyNeedsAttention = history.unavailable || history.failedDays > 0 || history.partialDays > 0
+            retryableFailure = history.retryableFailure
         }
 
-        val weightSeries = healthConnectManager.readWeightSeries(
-            today.minusDays(GAP_SCAN_DAYS.toLong()), today
-        )
+        val weightSeries = healthConnectManager.readOutcome(WeightRecord::class) {
+            healthConnectManager.readWeightOnlySeries(today.minusDays(90), today)
+        }
 
         // Fill any day missing from the recent window. A phone that was off for three days
         // used to lose those days permanently.
         val gapStart = today.minusDays(GAP_SCAN_DAYS.toLong()).toEpochDay()
-        val present = dailyMetricsDao.getPresentDays(gapStart, today.toEpochDay()).toSet()
+        val readableTypes = loggingFailures("history permission snapshot") {
+            healthConnectManager.readableRecordTypeNames()
+        }.getOrDefault(emptySet())
+        val present = dailyMetricsDao.getRange(gapStart, today.toEpochDay())
+            .filterNot { it.needsReadRetry(readableTypes) }.map { it.dateEpochDay }.toSet()
+        suspend fun refreshHistoryDay(day: LocalDate) {
+            val read = loggingFailures("syncDay(history)") { syncDay(day, userAge, userMaxHR, weightSeries) }.getOrNull()
+            historyNeedsAttention = historyNeedsAttention || read == null || !read.successful || read.partial
+            retryableFailure = retryableFailure || read == null || read.retryableFailure
+        }
         for (day in gapStart until today.toEpochDay()) {
             if (day !in present) {
-                loggingFailures("syncDay(gap)") { syncDay(LocalDate.ofEpochDay(day), userAge, userMaxHR, weightSeries) }
+                refreshHistoryDay(LocalDate.ofEpochDay(day))
             }
         }
 
         // Re-sync the trailing window so late-arriving sleep and workouts land.
         for (offset in TRAILING_RESYNC_DAYS downTo 1) {
-            loggingFailures("syncDay(trailing)") { syncDay(today.minusDays(offset.toLong()), userAge, userMaxHR, weightSeries) }
+            refreshHistoryDay(today.minusDays(offset.toLong()))
         }
 
-        val newAchievements = syncDay(today, userAge, userMaxHR, weightSeries)
+        val result = syncDay(today, userAge, userMaxHR, weightSeries)
 
         // Keep reports current — they were only regenerated after a backfill or by the
         // weekly worker, so the Weekly Report screen could be up to a week stale.
         loggingFailures("generateWeeklyReport") { generateWeeklyReport(userAge, userMaxHR) }
         loggingFailures("generateMonthlyReport") { generateMonthlyReport(userAge, userMaxHR) }
-        runCatching {
+        loggingFailures("heart rate retention") {
             heartRateSampleDao.deleteBefore(today.minusDays(HR_SAMPLE_RETENTION_DAYS.toLong()).toEpochDay())
         }
 
         val latestScores = computedScoresDao.getForDay(today.toEpochDay())
-        return SyncResult(latestScores, newAchievements)
+        return SyncResult(
+            latestScores, result.newAchievements, result.successful,
+            result.partial || (result.successful && historyNeedsAttention), result.unavailable,
+            retryableFailure || result.retryableFailure
+        )
     }
 
     /** Days of genuine Health Connect data — what the UI must show as "X days of history". */
@@ -177,84 +227,141 @@ class HealthRepository @Inject constructor(
      *              missing or corrupted history, but the skip-if-present check made it a
      *              no-op for exactly the days the user was complaining about.
      */
-    suspend fun backfillHistory(userAge: Int = 30, userMaxHR: Int = 190, force: Boolean = false) {
-        if (!healthConnectManager.isAvailable()) return
+    suspend fun backfillHistory(userAge: Int = 30, userMaxHR: Int = 190, force: Boolean = false): BackfillResult {
+        if (!healthConnectManager.isAvailable()) return BackfillResult(unavailable = true)
         val today = VitalTime.today()
         val windowStart = today.minusDays(BACKFILL_DAYS.toLong())
 
-        // Day keys inside the backfill window specifically. getLatest(30) returned the
-        // newest 30 rows regardless of whether they fell in the window at all, so after a
-        // long gap the skip set could be entirely outside it and thus useless.
-        val existingDays = if (force) emptySet() else
-            dailyMetricsDao.getPresentDays(windowStart.toEpochDay(), today.toEpochDay()).toSet()
+        // A failed read still creates a cache row. Presence alone must not mark that
+        // day complete, including when a previously denied permission is re-granted.
+        // Declined optional fields remain skipped until their access can be repaired.
+        val existingDays = if (force) emptySet() else {
+            val readableTypes = loggingFailures("backfill permission snapshot") {
+                healthConnectManager.readableRecordTypeNames()
+            }.getOrDefault(emptySet())
+            dailyMetricsDao.getRange(windowStart.toEpochDay(), today.toEpochDay())
+                .filterNot { it.needsReadRetry(readableTypes) }.map { it.dateEpochDay }.toSet()
+        }
 
         // One weight read for the whole window, attributed per day by LOCF.
-        val weightSeries = healthConnectManager.readWeightSeries(windowStart, today)
+        val weightSeries = healthConnectManager.readOutcome(WeightRecord::class) {
+            healthConnectManager.readWeightOnlySeries(windowStart.minusDays(90), today)
+        }
+        var refreshed = 0
+        var skipped = 0
+        var failed = 0
+        var partial = 0
+        var needsRetry = false
 
         for (daysBack in BACKFILL_DAYS downTo 1) {
             val day = today.minusDays(daysBack.toLong())
-            if (day.toEpochDay() in existingDays) continue
+            if (day.toEpochDay() in existingDays) {
+                skipped++
+                continue
+            }
             // One failed day must not abort the month. Health Connect grants permissions
             // individually, so a single declined record type used to throw out of syncDay,
             // out of the loop, and be swallowed by SyncWorker's catch — leaving a partial
             // month with no indication why, which then retried identically forever because
             // PREF_BACKFILL_DONE is only set after the loop completes.
-            loggingFailures("syncDay(backfill)") { syncDay(day, userAge, userMaxHR, weightSeries) }
+            val result = loggingFailures("syncDay(backfill)") { syncDay(day, userAge, userMaxHR, weightSeries) }.getOrNull()
+            if (result?.successful == true) {
+                refreshed++
+                if (result.partial) partial++
+                if (result.outcomes.any { it.status == ReadOutcomeStatus.FAILED }) needsRetry = true
+            } else {
+                failed++
+                needsRetry = needsRetry || result == null || result.retryableFailure
+            }
         }
+
+        // Earlier corrections can affect today's baselines and recommendation too.
+        if (force) loggingFailures("rescore today after history refresh") { rescoreDay(today.toEpochDay()) }
 
         // Regenerate weekly + monthly reports from backfilled data
         loggingFailures("generateWeeklyReport") { generateWeeklyReport(userAge, userMaxHR) }
         loggingFailures("generateMonthlyReport") { generateMonthlyReport(userAge, userMaxHR) }
 
-        prefs.edit().putBoolean(PREF_BACKFILL_DONE, true).apply()
+        prefs.edit().putBoolean(PREF_BACKFILL_DONE, failed == 0 && !needsRetry).apply()
+        return BackfillResult(refreshed, skipped, failed, partialDays = partial, retryableFailure = needsRetry)
     }
 
     suspend fun syncDay(
         day: LocalDate,
         userAge: Int,
         userMaxHR: Int,
-        weightSeries: List<WeightData>? = null
-    ): List<AchievementEngine.Achievement> {
-        if (!healthConnectManager.isAvailable()) return emptyList()
+        weightSeries: HealthReadOutcome<List<WeightData>>? = null
+    ): DaySyncResult = daySyncMutex.withLock {
+        syncDayInternal(day, userAge, userMaxHR, weightSeries)
+    }
+
+    private suspend fun syncDayInternal(
+        day: LocalDate,
+        userAge: Int,
+        userMaxHR: Int,
+        weightSeries: HealthReadOutcome<List<WeightData>>?
+    ): DaySyncResult {
+        if (!healthConnectManager.isAvailable()) return DaySyncResult(unavailable = true)
 
         // Each read is isolated: Health Connect grants permissions individually, so a
         // single declined or unsupported type must degrade to null rather than unwind the
         // whole day. BodyFatRecord in particular is one Samsung Health often has no data
         // for, and a user can plausibly grant nine of ten.
-        suspend fun <T> read(block: suspend () -> T): T? =
-            runCatching { block() }.onFailure { ErrorLog.record("HealthConnect read", it) }.getOrNull()
+        val outcomes = mutableListOf<HealthReadOutcome<*>>()
+        suspend fun <R : Record, T> read(type: kotlin.reflect.KClass<R>, block: suspend () -> T): HealthReadOutcome<T> =
+            healthConnectManager.readOutcome(type, block).also { outcomes += it }
 
-        val hrPoints = read { healthConnectManager.readHeartRateForDay(day) } ?: emptyList()
-        val sleep = read { healthConnectManager.readNightForDay(day) }
-        val steps = read { healthConnectManager.readStepsForDay(day) }
-        val calories = read { healthConnectManager.readCaloriesForDay(day) }
-        val activeCalories = read { healthConnectManager.readActiveCaloriesForDay(day) }
-        val distance = read { healthConnectManager.readDistanceForDay(day) }
-        val spO2 = read { healthConnectManager.readSpO2ForDay(day, sleep) }
-        val exerciseSessions = read { healthConnectManager.readExerciseSessions(day, day) } ?: emptyList()
+        val hrRead = read(HeartRateRecord::class) { healthConnectManager.readOvernightHeartRate(day) }
+        val overnightHR = hrRead.data.orEmpty()
+        val hrPoints = overnightHR.filter { VitalTime.epochDayOf(it.timestampMs) == day.toEpochDay() }
+        val sleep = read(SleepSessionRecord::class) { healthConnectManager.readNightForDay(day) }.data
+        val steps = read(StepsRecord::class) { healthConnectManager.readStepsForDay(day) }.data
+        val calories = read(TotalCaloriesBurnedRecord::class) { healthConnectManager.readCaloriesForDay(day) }.data
+        val activeCalories = read(ActiveCaloriesBurnedRecord::class) { healthConnectManager.readActiveCaloriesForDay(day) }.data
+        val distance = read(DistanceRecord::class) { healthConnectManager.readDistanceForDay(day) }.data
+        val spO2 = read(OxygenSaturationRecord::class) { healthConnectManager.readSpO2ForDay(day, sleep) }.data
+        val exercisesRead = read(ExerciseSessionRecord::class) { healthConnectManager.readExerciseSessions(day, day) }
+        val exerciseSessions = exercisesRead.data.orEmpty()
 
         // Resting HR: recorded when Samsung Health wrote it (minimum of the day, not an
         // arbitrary first record), otherwise derived from overnight samples. Whether
         // Samsung Health writes RestingHeartRateRecord at all is version- and
         // device-dependent for the Active 2, and without the fallback a null here nulls
         // recovery, stress, VO2, biological age AND readiness together.
-        val overnightHR = read { healthConnectManager.readOvernightHeartRate(day) } ?: emptyList()
-        val restingHRResult = read {
-            healthConnectManager.restingHRForDay(day, overnightHR.ifEmpty { hrPoints }, sleep)
+        val restingRead = read(RestingHeartRateRecord::class) { healthConnectManager.recordedRestingHRForDay(day) }
+        val restingHRResult = restingRead.data?.let { RestingHRResult(it, false, 1) }
+            ?: if (hrRead.successful) healthConnectManager.deriveRestingHR(day, overnightHR, sleep) else null
+        // The direct RHR permission may be absent while a fresh, explicitly derived value
+        // is available from independent HR samples. Do not label that estimate stale.
+        val metricOutcomes = outcomes.toMutableList()
+        if (restingHRResult?.derived == true) {
+            metricOutcomes.removeAll { it.recordType == "RestingHeartRateRecord" }
+            metricOutcomes += HealthReadOutcome("RestingHeartRateRecord", ReadOutcomeStatus.SUCCESS_DATA, restingHRResult)
         }
+        val weightRead = weightSeries ?: healthConnectManager.readOutcome(WeightRecord::class) {
+            healthConnectManager.readWeightOnlySeries(day.minusDays(90), day)
+        }
+        outcomes += weightRead
+        val weight = healthConnectManager.weightForDay(weightRead.data.orEmpty(), day)
+        val bodyFat = read(BodyFatRecord::class) { healthConnectManager.readBodyFatForDay(day) }.data
+        val floors = read(FloorsClimbedRecord::class) { healthConnectManager.readFloorsClimbedForDay(day) }.data
+        val elevation = read(ElevationGainedRecord::class) { healthConnectManager.readElevationGainForDay(day) }.data
+        val hrv = read(HeartRateVariabilityRmssdRecord::class) { healthConnectManager.readHrvRmssdForDay(day) }.data
+        read(Vo2MaxRecord::class) { healthConnectManager.readVo2MaxForDay(day) }
+        read(SpeedRecord::class) { healthConnectManager.readSpeedForDay(day) }
+        metricOutcomes += outcomes.filter { next -> metricOutcomes.none { it.recordType == next.recordType } }
 
-        val series = weightSeries ?: read {
-            healthConnectManager.readWeightSeries(day.minusDays(90), day)
-        } ?: emptyList()
-        val weight = healthConnectManager.weightForDay(series, day)
-
-        // A day Health Connect returned nothing for gets NO ROW. Writing one with steps,
-        // distance and calories coerced to 0 created phantom sedentary days that entered
-        // the step baseline and inflated the history depth that drives milestones.
+        // Empty days retain read-state rows, but never count as recorded history.
+        // Null readings must not become phantom sedentary days with zero steps/calories.
         val hasAnyData = hrPoints.isNotEmpty() || sleep != null || steps != null ||
             calories != null || distance != null || exerciseSessions.isNotEmpty() ||
-            restingHRResult != null
-        if (!hasAnyData) return emptyList()
+            restingHRResult != null || spO2 != null || activeCalories != null || floors != null ||
+            elevation != null || hrv != null
+        val previous = dailyMetricsDao.getForDay(day.toEpochDay())
+        if (restingHRResult == null && previous?.restingHRDerived == true && !hrRead.successful) {
+            metricOutcomes.removeAll { it.recordType == "RestingHeartRateRecord" }
+            metricOutcomes += HealthReadOutcome<Nothing>("RestingHeartRateRecord", hrRead.status)
+        }
 
         // A4 — Wear detection: did the watch actually appear to be worn (vs. charging /
         // phone-only / partial day), so a sensor gap is never scored as poor health.
@@ -287,13 +394,10 @@ class HealthRepository @Inject constructor(
         // DataQualityEngine's dataAgeHours was permanently null and every score was judged
         // on completeness alone. A day can be complete and still be built from readings that
         // stopped arriving thirty hours ago because the watch has not synced.
-        val newestRecordMs = listOfNotNull(
-            hrPoints.maxOfOrNull { it.timestampMs },
-            exerciseSessions.maxOfOrNull { it.endMs }
-        ).maxOrNull()
+        val newestRecordMs = outcomes.filter { it.successful && it.recordType !in setOf("WeightRecord", "BodyFatRecord") }
+            .mapNotNull { it.latestMeasurementMs }.maxOrNull()
 
-        dailyMetricsDao.upsert(
-            DailyMetricsEntity(
+        val metrics = DailyMetricsEntity(
                 dateEpochDay = day.toEpochDay(),
                 restingHR = restingHRResult?.bpm,
                 restingHRDerived = restingHRResult?.derived,
@@ -302,7 +406,7 @@ class HealthRepository @Inject constructor(
                 caloriesBurned = calories,
                 activeCalories = activeCalories,
                 weightKg = weight?.weightKg,
-                bodyFatPercent = weight?.bodyFatPercent,
+                bodyFatPercent = bodyFat,
                 spO2Percent = spO2?.averagePercent,
                 spO2ReadingCount = spO2?.readingCount,
                 spO2FromSleepWindow = spO2?.fromSleepWindow,
@@ -318,36 +422,39 @@ class HealthRepository @Inject constructor(
                 dataSourceType = dataSourceType,
                 hrPointsPerHour = hrPointsPerHour,
                 partialDayFraction = partialDayFraction,
-                hasData = true,
+                hasData = hasAnyData,
+                floorsClimbed = floors,
+                elevationGainMeters = elevation,
+                hrvRmssdMs = hrv,
                 newestRecordTimestampMs = newestRecordMs
+            ).preserveFailedReads(
+                previous, metricOutcomes,
+                retainedHeartRateData = !hrRead.successful && heartRateSampleDao.countForDay(day.toEpochDay()) > 0,
+                retainedExerciseData = !exercisesRead.successful && exerciseSessionDao.getForDay(day.toEpochDay()).isNotEmpty()
             )
-        )
-
-        // Replace the day's samples rather than appending. The unique index on timestampMs
-        // now makes IGNORE meaningful, but deleting first also drops samples Health Connect
-        // has since removed.
-        if (hrPoints.isNotEmpty()) {
-            heartRateSampleDao.deleteForDay(day.toEpochDay())
-            heartRateSampleDao.insertAll(hrPoints.map { pt ->
-                HeartRateSampleEntity(
-                    dateEpochDay = day.toEpochDay(),
-                    timestampMs = pt.timestampMs,
-                    bpm = pt.bpm
-                )
-            })
-        }
 
         val restingForZones = restingHRResult?.bpm ?: 60
 
-        for (session in exerciseSessions) {
+        var failedWorkoutHeartRate = false
+        val sessionEntities = exerciseSessions.map { session ->
             // Read HR over the session's ACTUAL span. Filtering the calendar-day list kept
             // only the pre-midnight portion of a late-evening workout, and the zone
             // calculator then fabricated a distribution from the remainder.
-            val hrForSession = if (session.endMs > VitalTime.endOfDayExclusiveMs(day.toEpochDay())) {
-                read { healthConnectManager.readHeartRateBetween(session.startMs, session.endMs) } ?: emptyList()
+            val sessionHrRead = if (session.endMs > VitalTime.endOfDayExclusiveMs(day.toEpochDay())) {
+                healthConnectManager.readOutcome(HeartRateRecord::class) {
+                    healthConnectManager.readHeartRateBetween(session.startMs, session.endMs)
+                }
             } else {
-                hrPoints.filter { it.timestampMs in session.startMs..session.endMs }
+                hrRead.copy(data = hrPoints.filter { it.timestampMs in session.startMs..session.endMs })
             }
+            if (!sessionHrRead.successful) {
+                failedWorkoutHeartRate = true
+                // The initial daily read may have succeeded, but that does not verify
+                // the part of a workout after midnight. Keep the failed outcome visible.
+                outcomes.removeAll { it.recordType == "HeartRateRecord" }
+                outcomes += sessionHrRead
+            }
+            val hrForSession = sessionHrRead.data.orEmpty()
 
             val load = TrainingLoadCalculator.calculateForSession(
                 session.copy(heartRatePoints = hrForSession), userMaxHR, restingForZones
@@ -358,8 +465,8 @@ class HealthRepository @Inject constructor(
             val avgHR = if (hrForSession.isEmpty()) null else hrForSession.map { it.bpm }.average().toInt()
             val maxHRSession = hrForSession.maxOfOrNull { it.bpm }
 
-            exerciseSessionDao.upsert(
-                ExerciseSessionEntity(
+            val existing = exerciseSessionDao.getByStartMs(session.startMs)
+            ExerciseSessionEntity(
                     startMs = session.startMs,
                     dateEpochDay = session.dateEpochDay,
                     endMs = session.endMs,
@@ -378,15 +485,35 @@ class HealthRepository @Inject constructor(
                     zone2Pct = zones[HRZone.ZONE2],
                     zone3Pct = zones[HRZone.ZONE3],
                     zone4Pct = zones[HRZone.ZONE4],
-                    zone5Pct = zones[HRZone.ZONE5]
-                )
-            )
+                    zone5Pct = zones[HRZone.ZONE5],
+                    muscleGroups = existing?.muscleGroups,
+                    rpe = existing?.rpe
+                ).preserveFailedHeartRate(existing, sessionHrRead.successful)
         }
+
+        val verifiedMetrics = if (failedWorkoutHeartRate) metrics.withFailedWorkoutHeartRate() else metrics
 
         val overnightGapHours = wearStatus.gaps
             .filter { it.startMinuteOfDay < 7 * 60 }
             .maxOfOrNull { it.durationMinutes / 60.0 } ?: 0.0
-        return computeAndStoreScores(day, userAge, userMaxHR, overnightGapHours, hrPoints)
+        val achievements = database.withTransaction {
+            val now = VitalTime.nowMs()
+            outcomes.forEach { outcome ->
+                syncStateDao.upsert(outcome.toSyncState(syncStateDao.getForType(outcome.recordType), now))
+            }
+            // Even a failed/empty day records its status. Existing cached values survive;
+            // successful empty reads can clear fields without creating phantom history.
+            dailyMetricsDao.upsert(verifiedMetrics)
+            if (hrRead.successful) {
+                heartRateSampleDao.deleteForDay(day.toEpochDay())
+                heartRateSampleDao.insertAll(hrPoints.map { pt ->
+                    HeartRateSampleEntity(dateEpochDay = day.toEpochDay(), timestampMs = pt.timestampMs, bpm = pt.bpm)
+                })
+            }
+            exerciseSessionDao.upsertAll(sessionEntities)
+            computeAndStoreScores(day, userAge, userMaxHR, overnightGapHours, hrPoints)
+        }
+        return DaySyncResult(achievements, outcomes)
     }
 
     /**
@@ -405,16 +532,20 @@ class HealthRepository @Inject constructor(
         overnightHRGapHours: Double = 0.0,
         todayHrPoints: List<HeartRatePoint> = emptyList()
     ): ScorePipeline.Output? {
-        val metrics = dailyMetricsDao.getForDay(today) ?: return null
-        val history = dailyMetricsDao.getRange(today - PIPELINE_HISTORY_DAYS, today - 1)
+        val cached = dailyMetricsDao.getForDay(today) ?: return null
+        val cachedHistory = dailyMetricsDao.getRange(today - PIPELINE_HISTORY_DAYS, today - 1)
+        val metrics = cached.freshForScoring()
+        val history = cachedHistory.map { it.freshForScoring() }
+        val metricsByDay = (cachedHistory + cached).associateBy { it.dateEpochDay }
         val priorScores = computedScoresDao.getBeforeAscending(today, PIPELINE_HISTORY_DAYS)
         val sessions = exerciseSessionDao.getRange(today - PIPELINE_HISTORY_DAYS, today)
+            .filterNot { metricsByDay[it.dateEpochDay]?.isStale("ExerciseSessionRecord") == true }
         val checkIns = checkInDao.getRange(today - PIPELINE_HISTORY_DAYS, today)
 
         // Part 7 — HR recovery needs the samples in the three minutes after the day's last
         // session ended.
         val latestSession = sessions.filter { it.dateEpochDay == today }.maxByOrNull { it.endMs }
-        val postWorkoutSamples = if (latestSession?.maxHR != null) {
+        val postWorkoutSamples = if (latestSession?.maxHR != null && !cached.isStale("HeartRateRecord")) {
             heartRateSampleDao.getForDay(today)
                 .filter { it.timestampMs > latestSession.endMs }
                 .sortedBy { it.timestampMs }
@@ -446,7 +577,7 @@ class HealthRepository @Inject constructor(
                 history = history.map { it.toPipelineMetrics() },
                 priorScores = priorScores.map { it.toPipelineScores() },
                 sessions = sessions.map { it.toPipelineSession() },
-                todayHrPoints = todayHrPoints,
+                todayHrPoints = if (cached.isStale("HeartRateRecord")) emptyList() else todayHrPoints,
                 postWorkoutSamples = postWorkoutSamples,
                 checkIns = checkIns.map { it.toPipelineCheckIn() },
                 overnightHRGapHours = overnightHRGapHours,
@@ -477,7 +608,7 @@ class HealthRepository @Inject constructor(
         todayHrPoints: List<HeartRatePoint> = emptyList()
     ): List<AchievementEngine.Achievement> {
         val today = day.toEpochDay()
-        val metrics = dailyMetricsDao.getForDay(today) ?: return emptyList()
+        val metrics = dailyMetricsDao.getForDay(today)?.freshForScoring() ?: return emptyList()
         val output = runPipeline(today, userAge, userMaxHR, overnightHRGapHours, todayHrPoints)
             ?: return emptyList()
 
@@ -487,7 +618,7 @@ class HealthRepository @Inject constructor(
         // rather than appended to. Nothing wrote this table at all before now, which is why
         // the muscle recovery card had no data behind it.
         if (today == VitalTime.todayEpochDay()) {
-            runCatching {
+            loggingFailures("save muscle recovery") {
                 muscleRecoveryDao.replaceAll(
                     output.muscleStatuses.map { st ->
                         MuscleRecoveryEntity(
@@ -674,6 +805,9 @@ class HealthRepository @Inject constructor(
         recommendationIntensity = recommendationIntensity,
         recommendationVolumePct = recommendationVolumePct,
         recommendationDetail = recommendationDetail,
+        recommendationConfidence = recommendationConfidence,
+        recommendationRationale = recommendationRationale,
+        recommendationAlternative = recommendationAlternative,
         dataQualityFactors = dataQualityFactors,
         dataQualityPositives = dataQualityPositives,
         // Derived from the day rather than System.currentTimeMillis(), so re-scoring the
