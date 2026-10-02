@@ -1,5 +1,6 @@
 package com.example.vitalcoreai.data.repository
 
+import android.util.Log
 import com.example.vitalcoreai.analytics.*
 import com.example.vitalcoreai.core.time.VitalTime
 import com.example.vitalcoreai.debug.ErrorLog
@@ -49,6 +50,8 @@ class HealthRepository @Inject constructor(
     private val daySyncMutex = Mutex()
 
     companion object {
+        private const val TAG = "VitalSync"
+
         /** How far back the one-time backfill reaches. */
         const val BACKFILL_DAYS = 30
 
@@ -63,13 +66,13 @@ class HealthRepository @Inject constructor(
          *
          * Re-running is safe: every score is keyed per-day and idempotent.
          *
-         * Set to 7 (one full week) so a watch that goes un-synced for several days
-         * (e.g. Sep 24–26 with no Samsung Health push) is always recovered on the first
-         * sync after reconnecting, without needing a manual "Resync history" tap.
+         * Set to 10 (more than a week) so a watch that goes un-synced for 8+ days
+         * (e.g. Sep 24–Oct 2 gap) is always recovered on the first sync after
+         * reconnecting, without needing a manual tap.
          */
-        const val TRAILING_RESYNC_DAYS = 7
+        const val TRAILING_RESYNC_DAYS = 10
 
-        /** How far back to hunt for missing days on each sync. */
+        /** How far back to hunt for missing AND stale days on each sync. */
         const val GAP_SCAN_DAYS = 30
 
         /** Intraday HR older than this is dropped — the table is otherwise unbounded. */
@@ -146,41 +149,59 @@ class HealthRepository @Inject constructor(
     // ─── Sync from Health Connect → Room ─────────────────────────────────
 
     suspend fun syncToday(userAge: Int = 30, userMaxHR: Int = 190): SyncResult {
-        if (!healthConnectManager.isAvailable()) return SyncResult(null, emptyList(), successful = false, unavailable = true)
+        if (!healthConnectManager.isAvailable()) {
+            Log.w(TAG, "syncToday: Health Connect unavailable")
+            return SyncResult(null, emptyList(), successful = false, unavailable = true)
+        }
         val today = VitalTime.today()
+        Log.d(TAG, "syncToday started — today=${today}, trailingDays=$TRAILING_RESYNC_DAYS, gapDays=$GAP_SCAN_DAYS")
         var historyNeedsAttention = false
         var retryableFailure = false
 
         if (!prefs.getBoolean(PREF_BACKFILL_DONE, false)) {
+            Log.d(TAG, "syncToday: running initial backfill")
             val history = backfillHistory(userAge, userMaxHR)
             historyNeedsAttention = history.unavailable || history.failedDays > 0 || history.partialDays > 0
             retryableFailure = history.retryableFailure
+            Log.d(TAG, "backfillHistory done: refreshed=${history.refreshedDays} skipped=${history.skippedDays} failed=${history.failedDays} partial=${history.partialDays}")
         }
 
         val weightSeries = healthConnectManager.readOutcome(WeightRecord::class) {
             healthConnectManager.readWeightOnlySeries(today.minusDays(90), today)
         }
 
-        // Fill any day missing from the recent window. A phone that was off for three days
-        // used to lose those days permanently.
+        // Fill any day missing from the recent window, AND any day whose stale-record
+        // flags indicate a previous read failed for a type that is now readable.
+        // The bug that caused Sep 24–Oct 1 to be permanently skipped:
+        //   • Those days HAD a row (phone pedometer wrote steps → hasData=1)
+        //   • needsReadRetry() was true (HR/Sleep stale), so they were excluded from `present`
+        //   • But they fell OUTSIDE TRAILING_RESYNC_DAYS (7), so the trailing loop missed them
+        // Fix: scan the ENTIRE GAP_SCAN_DAYS window for both absent AND stale rows.
         val gapStart = today.minusDays(GAP_SCAN_DAYS.toLong()).toEpochDay()
         val readableTypes = loggingFailures("history permission snapshot") {
             healthConnectManager.readableRecordTypeNames()
         }.getOrDefault(emptySet())
+        Log.d(TAG, "syncToday: readable types=${readableTypes}")
+        // `present` = days that do NOT need any retry (fully current rows)
         val present = dailyMetricsDao.getRange(gapStart, today.toEpochDay())
             .filterNot { it.needsReadRetry(readableTypes) }.map { it.dateEpochDay }.toSet()
         suspend fun refreshHistoryDay(day: LocalDate) {
+            Log.d(TAG, "refreshHistoryDay: ${day}")
             val read = loggingFailures("syncDay(history)") { syncDay(day, userAge, userMaxHR, weightSeries) }.getOrNull()
+            if (read == null || !read.successful) {
+                Log.e(TAG, "refreshHistoryDay failed for $day: outcomes=${read?.outcomes?.map { it.recordType + "=" + it.status }}")
+            }
             historyNeedsAttention = historyNeedsAttention || read == null || !read.successful || read.partial
             retryableFailure = retryableFailure || read == null || read.retryableFailure
         }
+        // Gap scan: absent days + days still needing retry (stale)
         for (day in gapStart until today.toEpochDay()) {
             if (day !in present) {
                 refreshHistoryDay(LocalDate.ofEpochDay(day))
             }
         }
 
-        // Re-sync the trailing window so late-arriving sleep and workouts land.
+        // Re-sync the trailing window unconditionally so late-arriving sleep and workouts land.
         for (offset in TRAILING_RESYNC_DAYS downTo 1) {
             refreshHistoryDay(today.minusDays(offset.toLong()))
         }
@@ -198,11 +219,15 @@ class HealthRepository @Inject constructor(
         val scorelessDays = loggingFailures("scoreless day scan") {
             dailyMetricsDao.getDaysWithMissingScores(gapStart, trailingCutoff)
         }.getOrDefault(emptyList())
+        if (scorelessDays.isNotEmpty()) {
+            Log.d(TAG, "syncToday: ${scorelessDays.size} days with data but missing scores — resyncing")
+        }
         for (epochDay in scorelessDays) {
             refreshHistoryDay(LocalDate.ofEpochDay(epochDay))
         }
 
         val result = syncDay(today, userAge, userMaxHR, weightSeries)
+        Log.d(TAG, "syncToday today-sync done: successful=${result.successful} partial=${result.partial} retry=${result.retryableFailure}")
 
         // Keep reports current — they were only regenerated after a backfill or by the
         // weekly worker, so the Weekly Report screen could be up to a week stale.
@@ -213,11 +238,27 @@ class HealthRepository @Inject constructor(
         }
 
         val latestScores = computedScoresDao.getForDay(today.toEpochDay())
-        return SyncResult(
+        val syncResult = SyncResult(
             latestScores, result.newAchievements, result.successful,
             result.partial || (result.successful && historyNeedsAttention), result.unavailable,
             retryableFailure || result.retryableFailure
         )
+        Log.d(TAG, "syncToday complete — newRecovery=${latestScores?.recoveryScore} newSleep=${latestScores?.sleepScore}")
+        return syncResult
+    }
+
+    /**
+     * Force a full re-sync ignoring any stored cursor/backfill flag.
+     *
+     * Re-reads 30 days of Health Connect data and upserts everything — existing
+     * check-ins, journals and workout annotations are never overwritten (the DAOs
+     * use @Upsert which preserves user-authored fields like rpe / muscleGroups).
+     */
+    suspend fun forceFullResync(userAge: Int = 30, userMaxHR: Int = 190): BackfillResult {
+        Log.d(TAG, "forceFullResync: clearing backfill flag and re-reading 30 days")
+        prefs.edit().putBoolean(PREF_BACKFILL_DONE, false).apply()
+        invalidateReportCache()
+        return backfillHistory(userAge, userMaxHR, force = true)
     }
 
     /** Days of genuine Health Connect data — what the UI must show as "X days of history". */
@@ -290,9 +331,11 @@ class HealthRepository @Inject constructor(
                 refreshed++
                 if (result.partial) partial++
                 if (result.outcomes.any { it.status == ReadOutcomeStatus.FAILED }) needsRetry = true
+                Log.d(TAG, "backfill day ${day}: ok partial=${result.partial}")
             } else {
                 failed++
                 needsRetry = needsRetry || result == null || result.retryableFailure
+                Log.e(TAG, "backfill day ${day}: failed outcomes=${result?.outcomes?.map { it.recordType + "=" + it.status }}")
             }
         }
 
@@ -303,7 +346,11 @@ class HealthRepository @Inject constructor(
         loggingFailures("generateWeeklyReport") { generateWeeklyReport(userAge, userMaxHR) }
         loggingFailures("generateMonthlyReport") { generateMonthlyReport(userAge, userMaxHR) }
 
-        prefs.edit().putBoolean(PREF_BACKFILL_DONE, failed == 0 && !needsRetry).apply()
+        // Only mark done when ALL reads succeeded. A partial success must re-check on
+        // the next launch so stale days are not permanently abandoned.
+        val done = failed == 0 && !needsRetry
+        Log.d(TAG, "backfillHistory done: refreshed=$refreshed skipped=$skipped failed=$failed done=$done")
+        prefs.edit().putBoolean(PREF_BACKFILL_DONE, done).apply()
         return BackfillResult(refreshed, skipped, failed, partialDays = partial, retryableFailure = needsRetry)
     }
 

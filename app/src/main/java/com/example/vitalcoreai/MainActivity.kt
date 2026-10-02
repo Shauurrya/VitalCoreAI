@@ -1,6 +1,11 @@
 package com.example.vitalcoreai
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.util.Log
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -29,9 +34,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.compose.rememberNavController
 import com.example.vitalcoreai.data.UserPrefs
 import com.example.vitalcoreai.data.healthconnect.HealthConnectManager
+import com.example.vitalcoreai.data.repository.HealthRepository
 import com.example.vitalcoreai.data.sync.SyncWorker
 import com.example.vitalcoreai.data.sync.WeeklyReportWorker
 import com.example.vitalcoreai.security.BiometricLock
@@ -44,6 +52,10 @@ import com.example.vitalcoreai.theme.VitalCoreTheme
 import com.example.vitalcoreai.ui.navigation.Routes
 import com.example.vitalcoreai.ui.navigation.VitalCoreNavGraph
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -55,6 +67,7 @@ import javax.inject.Inject
 class MainActivity : FragmentActivity() {
 
     @Inject lateinit var healthConnectManager: HealthConnectManager
+    @Inject lateinit var healthRepository: HealthRepository
 
     /**
      * Re-armed in [onStop], so returning from the recents list asks again.
@@ -63,6 +76,14 @@ class MainActivity : FragmentActivity() {
      * unlock the app, and `rememberSaveable` would survive exactly the wrong thing.
      */
     private var locked = mutableStateOf(false)
+
+    /**
+     * Activity-scoped coroutine scope for background sync tasks.
+     *
+     * SupervisorJob means a failed sync doesn’t cancel others running in parallel.
+     * Cancelled in [onDestroy] to avoid leaking coroutines after rotation.
+     */
+    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +101,26 @@ class MainActivity : FragmentActivity() {
         val userMaxHR = UserPrefs.maxHR(this)
         SyncWorker.schedulePeriodicSync(this, userAge, userMaxHR)
         WeeklyReportWorker.schedule(this, userAge, userMaxHR)
+
+        // Sync on every foreground — catches data that arrived while the app was closed.
+        // The objectives require this explicitly: "Sync on foreground".
+        lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                Log.d("VitalSync", "MainActivity.ON_START: launching foreground sync")
+                activityScope.launch {
+                    try {
+                        healthRepository.syncToday(userAge, userMaxHR)
+                    } catch (e: Exception) {
+                        Log.e("VitalSync", "Foreground sync failed", e)
+                    }
+                }
+            }
+        })
+
+        // Prompt the user to disable battery optimisation so the background worker fires
+        // reliably. This is advisory — the app works without it, but Samsung’s aggressive
+        // kill policy is why the periodic sync stopped arriving.
+        promptBatteryOptimisation()
 
         setContent {
             VitalCoreTheme {
@@ -109,12 +150,45 @@ class MainActivity : FragmentActivity() {
         if (BiometricLock.isEnabledAndUsable(this)) locked.value = true
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // activityScope's SupervisorJob is cancelled here; the coroutine won’t leak.
+    }
+
     private fun promptForUnlock() {
         BiometricLock.authenticate(
             activity = this,
             onSuccess = { locked.value = false },
             onFailure = { /* Stay locked. The platform prompt has already explained why. */ }
         )
+    }
+
+    /**
+     * If the system is managing our battery optimisation (i.e. we are NOT already on the
+     * exemption list), open the battery settings screen so the user can add VitalCore.
+     *
+     * We only show this once to avoid nagging. The user’s answer is recorded in SharedPrefs.
+     * On Android < M there is no doze at all, so nothing is needed.
+     */
+    private fun promptBatteryOptimisation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val prefs = getSharedPreferences("vitalcore_prefs", MODE_PRIVATE)
+        val alreadyAsked = prefs.getBoolean("battery_opt_prompted", false)
+        if (alreadyAsked) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+                prefs.edit().putBoolean("battery_opt_prompted", true).apply()
+            } catch (_: Exception) {
+                // Not all OEMs support ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.
+            }
+        }
     }
 }
 

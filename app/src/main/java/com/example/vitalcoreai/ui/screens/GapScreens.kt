@@ -982,10 +982,20 @@ fun DataSourcesScreen(
                     ) { Text("Grant or update VitalCore access") }
                     Button(
                         onClick = viewModel::readData,
-                        enabled = state.available == true && !state.isSyncing,
+                        enabled = state.available == true && !state.isSyncing && !state.isForceResyncing,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) {
                         Text(if (state.isSyncing) "Reading data…" else "Read data now")
+                    }
+                    OutlinedButton(
+                        onClick = viewModel::forceFullResync,
+                        enabled = state.available == true && !state.isSyncing && !state.isForceResyncing,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Text(
+                            if (state.isForceResyncing) "Re-reading last 30 days…"
+                            else "Force full re-sync (last 30 days)"
+                        )
                     }
                     OutlinedButton(onClick = viewModel::openHealthConnect, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Text(if (state.available == true) "Manage Health Connect access" else "Open or install Health Connect")
@@ -993,6 +1003,18 @@ fun DataSourcesScreen(
                     TextButton(onClick = viewModel::refreshAccess, enabled = !state.isChecking, modifier = Modifier.fillMaxWidth()) {
                         Text(if (state.isChecking) "Checking access…" else "Recheck access")
                     }
+                    state.lastSyncMs?.let { ms ->
+                        val syncLabel = sourceTime(ms)
+                        Text(
+                            "Last successful sync: $syncLabel",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OnSurfaceDim
+                        )
+                    } ?: Text(
+                        "Last successful sync: Never recorded",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceDim
+                    )
                     state.message?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
                     }

@@ -392,12 +392,15 @@ data class DataSourcesState(
     val isLoading: Boolean = true,
     val isChecking: Boolean = false,
     val isSyncing: Boolean = false,
+    val isForceResyncing: Boolean = false,
     val available: Boolean? = null,
     val connectionLabel: String = "Checking Health Connect",
     val backgroundAccess: String = "Checking availability",
     val historyAccess: String = "Checking availability",
     val message: String? = null,
-    val accessError: String? = null
+    val accessError: String? = null,
+    /** Epoch-ms of the most recent successful sync across all record types, null if never. */
+    val lastSyncMs: Long? = null
 )
 
 @HiltViewModel
@@ -444,7 +447,8 @@ class DataSourcesViewModel @Inject constructor(
         viewModelScope.launch {
             syncStateDao.observeAll().collect { reads ->
                 savedReads = reads
-                updateSources()
+                val latestSuccess = reads.mapNotNull { it.lastSuccessfulReadMs }.maxOrNull()
+                _state.update { it.copy(sources = buildRows(), isLoading = !accessChecked, lastSyncMs = latestSuccess) }
             }
         }
         viewModelScope.launch {
@@ -520,8 +524,14 @@ class DataSourcesViewModel @Inject constructor(
     }
 
     private fun updateSources() {
+        val rows = buildRows()
+        val latestSuccess = savedReads.mapNotNull { it.lastSuccessfulReadMs }.maxOrNull()
+        _state.update { it.copy(sources = rows, isLoading = !accessChecked, lastSyncMs = latestSuccess) }
+    }
+
+    private fun buildRows(): List<DataSourceItem> {
         val byType = savedReads.associateBy { it.recordType }
-        val rows = metrics.map { metric ->
+        return metrics.map { metric ->
             val recordType = metric.type.simpleName.orEmpty()
             presentDataSource(
                 recordType, metric.name, _state.value.available,
@@ -529,7 +539,6 @@ class DataSourcesViewModel @Inject constructor(
                 byType[recordType], VitalTime.nowMs(), metric.expectDaily, ::sourceAppName
             ).copy(dataNotes = dataSourceNotes(recordType, latestMetrics))
         }
-        _state.update { it.copy(sources = rows, isLoading = !accessChecked) }
     }
 
     private fun sourceAppName(packageName: String): String = try {
@@ -553,6 +562,43 @@ class DataSourcesViewModel @Inject constructor(
                 _state.update { it.copy(message = "The read could not finish. Saved measurements remain available; review the outcomes below and retry.") }
             } finally {
                 _state.update { it.copy(isSyncing = false) }
+                refreshAccess()
+            }
+        }
+    }
+
+    /**
+     * Force a full 30-day re-read, ignoring all stored cursors and backfill flags.
+     *
+     * Existing check-ins, journals and workout annotations are never overwritten.
+     * If Health Connect permissions are missing for some types, those types remain
+     * stale and the outcomes section below shows exactly which ones and why.
+     */
+    fun forceFullResync() {
+        if (_state.value.isForceResyncing || _state.value.available != true) return
+        _state.update { it.copy(isForceResyncing = true, message = null) }
+        viewModelScope.launch {
+            try {
+                val result = repository.forceFullResync(
+                    UserPrefs.age(context), UserPrefs.maxHR(context)
+                )
+                val msg = when {
+                    result.failedDays > 0 ->
+                        "Re-read complete: ${result.refreshedDays} days updated, ${result.failedDays} days failed. " +
+                        "Failed days will retry on next sync. Check Read outcomes below."
+                    result.partialDays > 0 ->
+                        "Re-read complete: ${result.refreshedDays} days updated (${result.partialDays} partial). " +
+                        "Partial days will be rechecked on next sync."
+                    else ->
+                        "Re-read complete: ${result.refreshedDays} days refreshed."
+                }
+                _state.update { it.copy(message = msg) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _state.update { it.copy(message = "Force re-sync could not finish. Your existing data is unchanged.") }
+            } finally {
+                _state.update { it.copy(isForceResyncing = false) }
                 refreshAccess()
             }
         }
