@@ -46,7 +46,21 @@ class HealthRepository @Inject constructor(
     private val prefs: SharedPreferences by lazy {
         context.getSharedPreferences("vitalcore_sync", Context.MODE_PRIVATE)
     }
-    private val PREF_BACKFILL_DONE = "backfill_done_v1"
+    /**
+     * Bumped from v1 → v2 in October 2026 to force a one-time re-backfill on all
+     * existing installs affected by the Sep 24 sync gap.
+     *
+     * The old flag (backfill_done_v1) is left in SharedPrefs — it is harmless, and
+     * removing it would require its own migration. The new key simply starts as false
+     * on every existing device, guaranteeing one fresh 30-day read that fills the gap.
+     */
+    private val PREF_BACKFILL_DONE = "backfill_done_v2"
+    /**
+     * One-time flag: after the backfill gap fix, existing days that have daily_metrics
+     * rows but no computed_scores entry must be rescored. The rescore uses data already
+     * in Room — no Health Connect read required — so it is cheap and runs once.
+     */
+    private val PREF_RESCORE_DONE = "rescore_gap_done_v1"
     private val daySyncMutex = Mutex()
 
     companion object {
@@ -159,11 +173,25 @@ class HealthRepository @Inject constructor(
         var retryableFailure = false
 
         if (!prefs.getBoolean(PREF_BACKFILL_DONE, false)) {
-            Log.d(TAG, "syncToday: running initial backfill")
+            Log.d(TAG, "syncToday: running initial backfill (v2 key — covers Sep 24 gap)")
             val history = backfillHistory(userAge, userMaxHR)
             historyNeedsAttention = history.unavailable || history.failedDays > 0 || history.partialDays > 0
             retryableFailure = history.retryableFailure
             Log.d(TAG, "backfillHistory done: refreshed=${history.refreshedDays} skipped=${history.skippedDays} failed=${history.failedDays} partial=${history.partialDays}")
+        } else if (!prefs.getBoolean(PREF_RESCORE_DONE, false)) {
+            // Rescore any day that already has daily_metrics data but no computed_scores.
+            // This is lighter than a full backfill — no HC read required — and runs once.
+            Log.d(TAG, "syncToday: one-time rescore pass for days missing scores")
+            val gapDays = loggingFailures("rescore gap scan") {
+                val gapStartDay = today.minusDays(GAP_SCAN_DAYS.toLong()).toEpochDay()
+                dailyMetricsDao.getDaysWithMissingScores(gapStartDay, today.toEpochDay())
+            }.getOrDefault(emptyList())
+            Log.d(TAG, "syncToday: ${gapDays.size} days need rescore from existing Room data")
+            for (epochDay in gapDays) {
+                loggingFailures("rescoreDay($epochDay)") { rescoreDay(epochDay) }
+            }
+            prefs.edit().putBoolean(PREF_RESCORE_DONE, true).apply()
+            Log.d(TAG, "syncToday: one-time rescore complete")
         }
 
         val weightSeries = healthConnectManager.readOutcome(WeightRecord::class) {

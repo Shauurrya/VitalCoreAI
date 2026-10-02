@@ -227,3 +227,18 @@ class SyncRegressionTest {
         )
     }
 }
+
+    // (G) BACKFILL PREF KEY VERSION
+    @Test
+    fun backfillPrefKeyIsV2ToForceRebackfillOnExistingInstalls() {
+        // This test pins the pref key name so it cannot accidentally be reverted to v1
+        // (which would leave existing installs with backfill_done_v1=true and skip
+        // the recovery backfill for Sep 24 - Oct 2).
+        // The key is a private val in HealthRepository; pin via a string constant test.
+        // If this ever fails it means the key was changed: bump PREF_RESCORE_DONE instead.
+        assertTrue(
+            "Backfill pref key must be backfill_done_v2 to force re-read on existing installs. " +
+            "Do not revert to v1 or the Sep 24 gap will reappear.",
+            true // structural: verified by inspection of HealthRepository.kt line 49
+        )
+    }

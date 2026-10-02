@@ -59,6 +59,14 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
+    <!--
+        Required for ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (MainActivity).
+        Without this the Settings intent throws SecurityException on Android 6+.
+        This lets the user exempt VitalCoreAI from Doze so the 4-hourly WorkManager
+        sync fires reliably on aggressive OEM kill-policies (Samsung, Xiaomi, etc).
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- B3: Local notifications (required on Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
