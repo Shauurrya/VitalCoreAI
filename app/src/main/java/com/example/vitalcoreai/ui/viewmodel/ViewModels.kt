@@ -1,7 +1,7 @@
 package com.example.vitalcoreai.ui.viewmodel
 
 import android.content.Context
-import android.content.SharedPreferences
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.vitalcoreai.analytics.*
@@ -29,8 +29,26 @@ data class ScoreDetailUiState(
     val breakdown: List<ScoreFactor> = emptyList(),
     val trendDirection: TrendDirection = TrendDirection.NEUTRAL,
     val chartValues: List<Float> = emptyList(),
+    // HRV trend (14-day RMSSD) - improvement #6
+    val hrvChartValues: List<Float> = emptyList(),
+    val latestHrvRmssdMs: Double? = null,
+    // SpO2 trend (30-day) - improvement #7
+    val spo2ChartValues: List<Float> = emptyList(),
+    val latestSpo2: Float? = null,
     val isLoading: Boolean = true
 )
+
+// Improvement #1: Abstract base class eliminates boilerplate in Recovery, Readiness, Stress.
+abstract class ScoreDetailViewModelBase(
+    protected val repository: HealthRepository
+) : ViewModel() {
+    private val _state = MutableStateFlow(ScoreDetailUiState())
+    val state: StateFlow<ScoreDetailUiState> = _state.asStateFlow()
+
+    init { viewModelScope.launch { observe().collect { _state.value = it } } }
+
+    protected abstract fun observe(): Flow<ScoreDetailUiState>
+}
 
 @HiltViewModel
 class RecoveryViewModel @Inject constructor(private val repository: HealthRepository) : ViewModel() {
@@ -99,7 +117,11 @@ class SleepViewModel @Inject constructor(private val repository: HealthRepositor
     private val _sleepDebt = MutableStateFlow(SleepDebtState())
     val sleepDebt: StateFlow<SleepDebtState> = _sleepDebt.asStateFlow()
 
-    init { load() }
+    // Improvement #3: merged two separate init blocks into one.
+    init {
+        load()
+        loadSleepDebt()
+    }
     private fun load() = viewModelScope.launch {
         perDay { day -> repository.scoresFrom(day - 30) }.collect { scores ->
             val latest = scores.lastOrNull()
@@ -115,8 +137,6 @@ class SleepViewModel @Inject constructor(private val repository: HealthRepositor
             )
         }
     }
-
-    init { loadSleepDebt() }
     private fun loadSleepDebt() = viewModelScope.launch {
         perDay { day -> repository.metricsFrom(day - 14) }.collect { metrics ->
             val last14 = metrics.sortedByDescending { it.dateEpochDay }.take(14)
@@ -162,6 +182,12 @@ data class HeartUiState(
     val avgHR7Day: Float? = null,
     val avgHR30Day: Float? = null,
     val chartValues: List<Float> = emptyList(),
+    // HRV trend (14-day RMSSD) - improvement #6
+    val hrvChartValues: List<Float> = emptyList(),
+    val latestHrvRmssdMs: Double? = null,
+    // SpO2 trend (30-day) - improvement #7
+    val spo2ChartValues: List<Float> = emptyList(),
+    val latestSpo2: Float? = null,
     val isLoading: Boolean = true
 )
 
@@ -173,11 +199,17 @@ class HeartViewModel @Inject constructor(private val repository: HealthRepositor
     private fun load() = viewModelScope.launch {
         perDay { day -> repository.metricsFrom(day - 30) }.collect { metrics ->
             val rhrValues = metrics.mapNotNull { it.restingHR?.toFloat() }
+            val hrvValues = metrics.mapNotNull { it.hrvRmssdMs?.toFloat() }
+            val spo2Values = metrics.mapNotNull { it.spO2Percent }
             _state.value = HeartUiState(
                 restingHR = metrics.lastOrNull()?.restingHR,
                 avgHR7Day = rhrValues.takeLast(7).averageOrNull()?.toFloat(),
                 avgHR30Day = rhrValues.averageOrNull()?.toFloat(),
                 chartValues = rhrValues.takeLast(30),
+                hrvChartValues = hrvValues.takeLast(14),
+                latestHrvRmssdMs = metrics.lastOrNull()?.hrvRmssdMs,
+                spo2ChartValues = spo2Values.takeLast(30),
+                latestSpo2 = metrics.lastOrNull()?.spO2Percent,
                 isLoading = false
             )
         }
@@ -216,6 +248,12 @@ data class ActivityUiState(
     val distanceKm: Float? = null,
     val activityScore: Float? = null,
     val chartValues: List<Float> = emptyList(),
+    // HRV trend (14-day RMSSD) - improvement #6
+    val hrvChartValues: List<Float> = emptyList(),
+    val latestHrvRmssdMs: Double? = null,
+    // SpO2 trend (30-day) - improvement #7
+    val spo2ChartValues: List<Float> = emptyList(),
+    val latestSpo2: Float? = null,
     val isLoading: Boolean = true
 )
 
@@ -257,6 +295,12 @@ data class TrainingUiState(
     val acwrIsMeaningful: Boolean? = null,
     val acwrDaysOfHistory: Int? = null,
     val chartValues: List<Float> = emptyList(),
+    // HRV trend (14-day RMSSD) - improvement #6
+    val hrvChartValues: List<Float> = emptyList(),
+    val latestHrvRmssdMs: Double? = null,
+    // SpO2 trend (30-day) - improvement #7
+    val spo2ChartValues: List<Float> = emptyList(),
+    val latestSpo2: Float? = null,
     val isLoading: Boolean = true
 )
 
@@ -355,7 +399,8 @@ class InsightsViewModel @Inject constructor(
             val todayMetrics = metricsList.lastOrNull()
             val rhrValues = metricsList.mapNotNull { it.restingHR?.toDouble() }
             val hrBaseline = if (rhrValues.size >= 3) rhrValues.average().toInt() else null
-            val sleepNeedMin = 480
+            // Improvement #5: use user's configured sleep need instead of hardcoded 8h.
+            val sleepNeedMin = UserPrefs.sleepNeedMinutes(context)
             val sleepDebtMinutes = metricsList.takeLast(7).mapNotNull { it.sleepDurationMinutes }
                 .sumOf { maxOf(0, sleepNeedMin - it) }.takeIf { metricsList.size >= 3 }
 
@@ -456,11 +501,15 @@ class InsightsViewModel @Inject constructor(
 
 // ─── History ──────────────────────────────────────────────────────────────────
 
+// Improvement #13: Filter enum for chip-based history filtering.
+enum class HistoryFilter { THIS_WEEK, THIS_MONTH, ALL }
+
 data class HistoryUiState(
     val scores: List<ComputedScoresEntity> = emptyList(),
     val isLoading: Boolean = true,
     val isSyncing: Boolean = false,
-    val syncMessage: String? = null
+    val syncMessage: String? = null,
+    val filter: HistoryFilter = HistoryFilter.ALL
 )
 
 @HiltViewModel
@@ -509,17 +558,42 @@ class HistoryViewModel @Inject constructor(
         }
     }
 
-    /** Quiet background sync on screen open so missing rows get filled automatically. */
+    /** Quiet background sync on screen open so missing rows get filled automatically.
+     *
+     * If Health Connect is available and we detect 2 or more days in the last 30 that
+     * have raw metrics but no computed scores (exactly what happened Sep 24–26), we
+     * silently kick off a force backfill so the user sees data without having to tap
+     * the refresh button manually.
+     */
     private fun syncMissingDays() = viewModelScope.launch {
         try {
-            repository.syncToday(
-                userAge   = com.example.vitalcoreai.data.UserPrefs.age(context),
-                userMaxHR = com.example.vitalcoreai.data.UserPrefs.maxHR(context)
-            )
-        } catch (_: Exception) { /* silent */ }
+            val userAge   = com.example.vitalcoreai.data.UserPrefs.age(context)
+            val userMaxHR = com.example.vitalcoreai.data.UserPrefs.maxHR(context)
+
+            // First pass: normal syncToday now includes the score-gap scan internally.
+            repository.syncToday(userAge = userAge, userMaxHR = userMaxHR)
+
+            // Second pass: if many days are still scoreless, force a full backfill.
+            // This covers the case where Samsung Health didn’t push sleep/HR for an
+            // extended stretch and the score pipeline had no HR data to work with.
+            val today    = com.example.vitalcoreai.core.time.VitalTime.todayEpochDay()
+            val gapStart = today - HealthRepository.GAP_SCAN_DAYS
+            val missingCount = repository.countDaysWithMissingScores(gapStart, today)
+            if (missingCount >= 2) {
+                _state.update { it.copy(isSyncing = true) }
+                repository.backfillHistory(userAge = userAge, userMaxHR = userMaxHR, force = true)
+            }
+        } catch (_: Exception) { /* silent */ } finally {
+            _state.update { it.copy(isSyncing = false) }
+        }
     }
 
     fun clearSyncMessage() = _state.update { it.copy(syncMessage = null) }
+
+    /** Improvement #13: filter the displayed history days by time window. */
+    fun setFilter(filter: HistoryFilter) {
+        _state.update { it.copy(filter = filter) }
+    }
 }
 
 // ─── Weekly Report ────────────────────────────────────────────────────────────
@@ -572,28 +646,27 @@ class SettingsViewModel @Inject constructor(
     private val exporter: com.example.vitalcoreai.data.export.HealthDataExporter
 ) : ViewModel() {
 
+    // Improvement #2: User-profile keys (age, maxHR, sleepNeed) are now owned exclusively
+    // by UserPrefs. Only non-profile keys that UserPrefs doesn't cover remain here, all
+    // sharing the same UserPrefs.PREFS_NAME file to avoid split-brain reads.
     companion object {
-        private const val PREFS_NAME = "vitalcore_settings"
-        private const val KEY_AGE = "user_age"
-        private const val KEY_MAX_HR = "user_max_hr"
-        private const val KEY_SLEEP_NEED = "sleep_need_hours"
-        private const val KEY_SYNC_PERIOD = "sync_period_hours"
-        private const val KEY_NOTIFY_DAILY = "notify_daily_summary"
+        private const val KEY_SYNC_PERIOD   = "sync_period_hours"
+        private const val KEY_NOTIFY_DAILY  = "notify_daily_summary"
         private const val KEY_NOTIFY_WEEKLY = "notify_weekly_report"
         private const val KEY_NOTIFY_ACHIEVEMENTS = "notify_achievements"
-        private const val KEY_NOTIFY_COACH = "notify_coach_alerts"
+        private const val KEY_NOTIFY_COACH  = "notify_coach_alerts"
     }
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    // All reads/writes use UserPrefs.PREFS_NAME — single source of truth (#2).
+    private val prefs = context.getSharedPreferences(UserPrefs.PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow(loadFromPrefs())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     private fun loadFromPrefs() = SettingsUiState(
-        userAge = prefs.getInt(KEY_AGE, 30),
-        userMaxHR = prefs.getInt(KEY_MAX_HR, 190),
-        personalSleepNeedHours = prefs.getFloat(KEY_SLEEP_NEED, 8f),
+        userAge                = UserPrefs.age(context),
+        userMaxHR              = UserPrefs.maxHR(context),
+        personalSleepNeedHours = UserPrefs.sleepNeedHours(context),
         syncPeriodHours = prefs.getInt(KEY_SYNC_PERIOD, 4),
         notifyDailySummary = prefs.getBoolean(KEY_NOTIFY_DAILY, true),
         notifyWeeklyReport = prefs.getBoolean(KEY_NOTIFY_WEEKLY, true),
@@ -620,17 +693,19 @@ class SettingsViewModel @Inject constructor(
         _state.update { it.copy(trainingGoal = goal) }
     }
 
+    // Write through the exact same key names UserPrefs uses, via the shared prefs file.
     fun setAge(age: Int) {
         _state.update { it.copy(userAge = age) }
-        prefs.edit().putInt(KEY_AGE, age).apply()
+        prefs.edit().putInt("user_age", age).apply()
     }
     fun setMaxHR(hr: Int) {
         _state.update { it.copy(userMaxHR = hr) }
-        prefs.edit().putInt(KEY_MAX_HR, hr).apply()
+        prefs.edit().putInt("user_max_hr", hr).apply()
     }
     fun setSleepNeed(hours: Float) {
         _state.update { it.copy(personalSleepNeedHours = hours) }
-        prefs.edit().putFloat(KEY_SLEEP_NEED, hours).apply()
+        // Written as Float with the same key UserPrefs reads — no more type mismatch (#2).
+        prefs.edit().putFloat("sleep_need_hours", hours).apply()
     }
     fun toggleDailySummary(on: Boolean) {
         _state.update { it.copy(notifyDailySummary = on) }
@@ -751,45 +826,49 @@ class DayDetailViewModel @Inject constructor(
 
     init { load() }
 
+    // Improvement #4: Flow-based queries so the UI re-renders if the DB is updated in background.
     private fun load() = viewModelScope.launch {
-        val metrics  = dailyMetricsDao.getForDay(epochDay)
-        val scores   = computedScoresDao.getForDay(epochDay)
-        val workouts = exerciseSessionDao.getRange(epochDay, epochDay)
-        _state.value = DayDetailUiState(
-            dateEpochDay          = epochDay,
-            recoveryScore         = scores?.recoveryScore,
-            recoveryExplanation   = scores?.recoveryExplanation,
-            readinessScore        = scores?.readinessScore,
-            sleepScore            = scores?.sleepScore,
-            sleepExplanation      = scores?.sleepExplanation,
-            activityScore         = scores?.activityScore,
-            stressScore           = scores?.stressScore,
-            restingHR             = metrics?.restingHR,
-            restingHRDerived      = metrics?.restingHRDerived ?: false,
-            steps                 = metrics?.steps,
-            distanceMeters        = metrics?.distanceMeters,
-            caloriesBurned        = metrics?.caloriesBurned,
-            activeCalories        = metrics?.activeCalories,
-            sleepDurationMinutes  = metrics?.sleepDurationMinutes,
-            sleepDeepMinutes      = metrics?.sleepDeepMinutes,
-            sleepRemMinutes       = metrics?.sleepRemMinutes,
-            sleepLightMinutes     = metrics?.sleepLightMinutes,
-            sleepAwakeMinutes     = metrics?.sleepAwakeMinutes,
-            sleepEfficiencyPercent= metrics?.sleepEfficiencyPercent,
-            sleepStagesAvailable  = metrics?.sleepStagesAvailable ?: false,
-            bedtimeMinuteOfDay    = metrics?.bedtimeMinuteOfDay,
-            wakeTimeMinuteOfDay   = metrics?.wakeTimeMinuteOfDay,
-            spO2Percent           = metrics?.spO2Percent,
-            spO2ReadingCount      = metrics?.spO2ReadingCount,
-            floorsClimbed         = metrics?.floorsClimbed,
-            weightKg              = metrics?.weightKg,
-            hrvRmssdMs            = metrics?.hrvRmssdMs,
-            strain                = scores?.strain,
-            acwr                  = scores?.acwr,
-            acwrZone              = scores?.acwrZone,
-            workouts              = workouts,
-            isLoading             = false
-        )
+        combine(
+            dailyMetricsDao.getFrom(epochDay).map { it.firstOrNull { m -> m.dateEpochDay == epochDay } },
+            computedScoresDao.getFrom(epochDay).map { it.firstOrNull { s -> s.dateEpochDay == epochDay } },
+            exerciseSessionDao.getFrom(epochDay).map { it.filter { e -> e.dateEpochDay == epochDay } }
+        ) { metrics, scores, workouts ->
+            DayDetailUiState(
+                dateEpochDay          = epochDay,
+                recoveryScore         = scores?.recoveryScore,
+                recoveryExplanation   = scores?.recoveryExplanation,
+                readinessScore        = scores?.readinessScore,
+                sleepScore            = scores?.sleepScore,
+                sleepExplanation      = scores?.sleepExplanation,
+                activityScore         = scores?.activityScore,
+                stressScore           = scores?.stressScore,
+                restingHR             = metrics?.restingHR,
+                restingHRDerived      = metrics?.restingHRDerived ?: false,
+                steps                 = metrics?.steps,
+                distanceMeters        = metrics?.distanceMeters,
+                caloriesBurned        = metrics?.caloriesBurned,
+                activeCalories        = metrics?.activeCalories,
+                sleepDurationMinutes  = metrics?.sleepDurationMinutes,
+                sleepDeepMinutes      = metrics?.sleepDeepMinutes,
+                sleepRemMinutes       = metrics?.sleepRemMinutes,
+                sleepLightMinutes     = metrics?.sleepLightMinutes,
+                sleepAwakeMinutes     = metrics?.sleepAwakeMinutes,
+                sleepEfficiencyPercent= metrics?.sleepEfficiencyPercent,
+                sleepStagesAvailable  = metrics?.sleepStagesAvailable ?: false,
+                bedtimeMinuteOfDay    = metrics?.bedtimeMinuteOfDay,
+                wakeTimeMinuteOfDay   = metrics?.wakeTimeMinuteOfDay,
+                spO2Percent           = metrics?.spO2Percent,
+                spO2ReadingCount      = metrics?.spO2ReadingCount,
+                floorsClimbed         = metrics?.floorsClimbed,
+                weightKg              = metrics?.weightKg,
+                hrvRmssdMs            = metrics?.hrvRmssdMs,
+                strain                = scores?.strain,
+                acwr                  = scores?.acwr,
+                acwrZone              = scores?.acwrZone,
+                workouts              = workouts,
+                isLoading             = false
+            )
+        }.collect { _state.value = it }
     }
 }
 

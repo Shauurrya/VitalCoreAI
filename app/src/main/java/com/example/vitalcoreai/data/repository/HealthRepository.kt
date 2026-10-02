@@ -62,8 +62,12 @@ class HealthRepository @Inject constructor(
          * sleepDurationMinutes and recoveryScore null for that day forever.
          *
          * Re-running is safe: every score is keyed per-day and idempotent.
+         *
+         * Set to 7 (one full week) so a watch that goes un-synced for several days
+         * (e.g. Sep 24–26 with no Samsung Health push) is always recovered on the first
+         * sync after reconnecting, without needing a manual "Resync history" tap.
          */
-        const val TRAILING_RESYNC_DAYS = 3
+        const val TRAILING_RESYNC_DAYS = 7
 
         /** How far back to hunt for missing days on each sync. */
         const val GAP_SCAN_DAYS = 30
@@ -179,6 +183,23 @@ class HealthRepository @Inject constructor(
         // Re-sync the trailing window so late-arriving sleep and workouts land.
         for (offset in TRAILING_RESYNC_DAYS downTo 1) {
             refreshHistoryDay(today.minusDays(offset.toLong()))
+        }
+
+        // Score-gap scan: days that HAVE a daily_metrics row (so the gap scan above
+        // skipped them as "present") but are missing a computed_scores entry. This is
+        // exactly what happens when Samsung Health fails to push sleep/HR for several
+        // days — metrics rows exist (steps come from the phone pedometer), the day is
+        // therefore considered present, but recovery/readiness/sleep scores remain null
+        // forever because the score pipeline never ran with sufficient data.
+        //
+        // The trailing window above already covers the most recent TRAILING_RESYNC_DAYS,
+        // so we scan the rest of the GAP_SCAN_DAYS window to avoid double-syncing.
+        val trailingCutoff = today.minusDays(TRAILING_RESYNC_DAYS.toLong()).toEpochDay()
+        val scorelessDays = loggingFailures("scoreless day scan") {
+            dailyMetricsDao.getDaysWithMissingScores(gapStart, trailingCutoff)
+        }.getOrDefault(emptyList())
+        for (epochDay in scorelessDays) {
+            refreshHistoryDay(LocalDate.ofEpochDay(epochDay))
         }
 
         val result = syncDay(today, userAge, userMaxHR, weightSeries)
@@ -838,6 +859,10 @@ class HealthRepository @Inject constructor(
     fun scoresFrom(epochDay: Long): Flow<List<ComputedScoresEntity>> = computedScoresDao.getFrom(epochDay)
 
     fun metricsFrom(epochDay: Long): Flow<List<DailyMetricsEntity>> = dailyMetricsDao.getFrom(epochDay)
+
+    /** Days with raw data but no computed scores — used to auto-detect sync gaps. */
+    suspend fun countDaysWithMissingScores(start: Long, end: Long): Int =
+        dailyMetricsDao.countDaysWithMissingScores(start, end)
 
     fun exerciseFrom(epochDay: Long): Flow<List<ExerciseSessionEntity>> = exerciseSessionDao.getFrom(epochDay)
 

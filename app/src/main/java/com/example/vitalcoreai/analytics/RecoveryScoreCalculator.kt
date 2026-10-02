@@ -87,7 +87,7 @@ object RecoveryScoreCalculator {
      * @param qualityInput              pre-computed quality signals from DataQualityEngine
      */
     fun calculate(
-        todaySleep: SleepData,
+        todaySleep: SleepData?,
         sleepBaseline14Days: List<SleepData>,
         todayRestingHR: RestingHRData,
         restingHRBaseline30Days: List<RestingHRData>,
@@ -104,7 +104,7 @@ object RecoveryScoreCalculator {
 
         // ── A3: Data quality ─────────────────────────────────────────────────
         val effectiveQualityInput = qualityInput ?: DataQualityEngine.QualityInput(
-            hasSleepToday = true,
+            hasSleepToday = todaySleep != null,
             hasHRToday = true,
             sleepHistoryDays = sleepBaseline14Days.size,
             hrHistoryDays = restingHRBaseline30Days.size
@@ -122,33 +122,62 @@ object RecoveryScoreCalculator {
         )
 
         // ── Sleep Quality (35%) — duration 60% + efficiency 40% ──────────────
-        val durationScore = SleepScoreCalculator.durationScoreFor(
-            todaySleep.durationMinutes, personalSleepNeedMinutes
-        )
-        val efficiency = todaySleep.efficiencyPercent
-        val efficiencyScore = efficiency?.let {
-            BaselineUtils.zScoreToScore(it, sleepEffBaseline.mean, sleepEffBaseline.std, invertPolarity = false)
-        }
-        // Absent efficiency redistributes onto duration rather than substituting a constant.
-        val sleepScore = if (efficiencyScore != null) {
-            durationScore * DURATION_SHARE + efficiencyScore * EFFICIENCY_SHARE
+        // When sleep is absent (Samsung Health hasn’t synced it yet), the 35% sleep
+        // quality and 20% sleep consistency components are dropped, and the remaining
+        // HR (30%) + training (15%) weight is renormalized to fill 100%. The score is
+        // flagged LOW confidence so the UI can present it honestly.
+        val sleepFactor: ScoreFactor?
+        val sleepScore: Float
+        val sleepDelta: String?
+        val consistencyFactor: ScoreFactor?
+        val consistencyScore: Float
+
+        if (todaySleep != null) {
+            val durationScore = SleepScoreCalculator.durationScoreFor(
+                todaySleep.durationMinutes, personalSleepNeedMinutes
+            )
+            val efficiency = todaySleep.efficiencyPercent
+            val efficiencyScore = efficiency?.let {
+                BaselineUtils.zScoreToScore(it, sleepEffBaseline.mean, sleepEffBaseline.std, invertPolarity = false)
+            }
+            sleepScore = if (efficiencyScore != null) {
+                durationScore * DURATION_SHARE + efficiencyScore * EFFICIENCY_SHARE
+            } else {
+                durationScore
+            }
+            sleepDelta = buildSleepDelta(todaySleep, sleepBaseline14Days)
+            sleepFactor = ScoreFactor(
+                name = "Sleep Quality",
+                contribution = weights.sleepQuality * 100f,
+                rawValue = if (efficiency != null)
+                    "${todaySleep.durationMinutes.toHoursMin()}, ${efficiency.toInt()}% efficiency"
+                else
+                    "${todaySleep.durationMinutes.toHoursMin()}, efficiency unavailable",
+                score = sleepScore,
+                description = buildSleepDescription(
+                    todaySleep.durationMinutes, personalSleepNeedMinutes, efficiency, sleepEffBaseline.mean
+                ),
+                delta = sleepDelta
+            )
+            // Sleep Consistency (20%)
+            val allSleepSessions = sleepBaseline14Days + listOf(todaySleep)
+            consistencyScore = calculateSleepConsistency(allSleepSessions)
+            val bedtimeVariance = calcBedtimeVarianceMinutes(sleepBaseline14Days)
+            consistencyFactor = ScoreFactor(
+                name = "Sleep Consistency",
+                contribution = weights.sleepConsistency * 100f,
+                rawValue = "Bedtime variance: ${bedtimeVariance}min",
+                score = consistencyScore,
+                description = buildConsistencyDescription(consistencyScore)
+            )
         } else {
-            durationScore
+            // Sleep unavailable — drop sleep quality + consistency components.
+            sleepScore = 0f   // not used in composite below when sleep == null
+            sleepDelta = null
+            sleepFactor = null
+            consistencyScore = 0f
+            consistencyFactor = null
         }
-        val sleepDelta = buildSleepDelta(todaySleep, sleepBaseline14Days)
-        val sleepFactor = ScoreFactor(
-            name = "Sleep Quality",
-            contribution = weights.sleepQuality * 100f,
-            rawValue = if (efficiency != null)
-                "${todaySleep.durationMinutes.toHoursMin()}, ${efficiency.toInt()}% efficiency"
-            else
-                "${todaySleep.durationMinutes.toHoursMin()}, efficiency unavailable",
-            score = sleepScore,
-            description = buildSleepDescription(
-                todaySleep.durationMinutes, personalSleepNeedMinutes, efficiency, sleepEffBaseline.mean
-            ),
-            delta = sleepDelta
-        )
 
         // ── Resting HR (30%) ─────────────────────────────────────────────────
         val hrScore = BaselineUtils.zScoreToScore(
@@ -169,16 +198,7 @@ object RecoveryScoreCalculator {
         )
 
         // ── Sleep Consistency (20%) ──────────────────────────────────────────
-        val allSleepSessions = sleepBaseline14Days + listOf(todaySleep)
-        val consistencyScore = calculateSleepConsistency(allSleepSessions)
-        val bedtimeVariance = calcBedtimeVarianceMinutes(sleepBaseline14Days)
-        val consistencyFactor = ScoreFactor(
-            name = "Sleep Consistency",
-            contribution = weights.sleepConsistency * 100f,
-            rawValue = "Bedtime variance: ${bedtimeVariance}min",
-            score = consistencyScore,
-            description = buildConsistencyDescription(consistencyScore)
-        )
+        // (computed above inside the todaySleep != null branch)
 
         // ── Training Recovery (15%) ──────────────────────────────────────────
         val trainingScore = priorDayTrainingLoad?.let {
@@ -195,35 +215,42 @@ object RecoveryScoreCalculator {
         )
 
         // ── Composite ────────────────────────────────────────────────────────
-        var totalScore = (sleepScore * weights.sleepQuality) +
-                (hrScore * weights.restingHR) +
-                (consistencyScore * weights.sleepConsistency) +
-                (trainingScore * weights.trainingLoad)
-
-        // SpO₂ modifier ±5 pts. Requires at least MIN_SPO2_READINGS overnight samples:
-        // a single spurious 89% spot reading used to cost 5 recovery points at full
-        // confidence, and daytime spot checks are both noisier and biased.
+        // When sleep is absent, renormalize HR + training weights to fill 100%.
+        val totalScore: Float
         val spO2Note: String
-        if (spO2Percent != null && spO2ReadingCount >= MIN_SPO2_READINGS) {
-            val mod = when {
-                spO2Percent >= 98f ->  3f
-                spO2Percent >= 95f ->  0f
-                spO2Percent >= 90f -> -3f
-                else               -> -5f
+        if (todaySleep != null) {
+            var raw = (sleepScore * weights.sleepQuality) +
+                    (hrScore * weights.restingHR) +
+                    (consistencyScore * weights.sleepConsistency) +
+                    (trainingScore * weights.trainingLoad)
+            if (spO2Percent != null && spO2ReadingCount >= MIN_SPO2_READINGS) {
+                val mod = when {
+                    spO2Percent >= 98f ->  3f
+                    spO2Percent >= 95f ->  0f
+                    spO2Percent >= 90f -> -3f
+                    else               -> -5f
+                }
+                raw += mod
+                spO2Note = " SpO₂ ${spO2Percent.toInt()}% (${if (mod >= 0) "+" else ""}${mod.toInt()} pts)."
+            } else {
+                spO2Note = ""
             }
-            totalScore += mod
-            spO2Note = " SpO₂ ${spO2Percent.toInt()}% (${if (mod >= 0) "+" else ""}${mod.toInt()} pts)."
+            totalScore = raw.coerceIn(0f, 100f)
         } else {
+            // Only HR (30%) + training (15%) available — renormalize to 100%.
+            val hrWeight    = weights.restingHR    / (weights.restingHR + weights.trainingLoad)
+            val trainWeight = weights.trainingLoad / (weights.restingHR + weights.trainingLoad)
+            totalScore = (hrScore * hrWeight + trainingScore * trainWeight).coerceIn(0f, 100f)
             spO2Note = ""
         }
-        totalScore = totalScore.coerceIn(0f, 100f)
 
         // ── A6: Root-cause explanation ───────────────────────────────────────
         val explanation = buildExplanation(
             totalScore, priorDayScore,
             hrDiff, hrDeltaText, sleepDelta,
             consistencyScore, spO2Note,
-            quality
+            quality,
+            sleepAvailable = todaySleep != null
         )
 
         // ── Trend direction ───────────────────────────────────────────────────
@@ -234,11 +261,12 @@ object RecoveryScoreCalculator {
         }
 
         // ── Coach triggers ────────────────────────────────────────────────────
+        val bedtimeVarianceForTrigger = if (todaySleep != null) calcBedtimeVarianceMinutes(sleepBaseline14Days) else 0
         val triggers = buildSet {
             if (totalScore < 40f) add(CoachTrigger.RECOVERY_LOW)
             if (totalScore > 85f) add(CoachTrigger.RECOVERY_EXCELLENT)
             if (hrDiff > 8)       add(CoachTrigger.HR_ELEVATED)
-            if (bedtimeVariance > 90) add(CoachTrigger.SLEEP_DRIFTING)
+            if (bedtimeVarianceForTrigger > 90) add(CoachTrigger.SLEEP_DRIFTING)
         }
 
         // ── Historical comparison ─────────────────────────────────────────────
@@ -250,7 +278,7 @@ object RecoveryScoreCalculator {
         }
 
         // ── Breakdown ranked highest-impact first ────────────────────────────
-        val breakdown = listOf(sleepFactor, hrFactor, consistencyFactor, trainingFactor)
+        val breakdown = listOfNotNull(sleepFactor, hrFactor, consistencyFactor, trainingFactor)
             .sortedByDescending { kotlin.math.abs(it.score - 50f) }   // highest deviation first
 
         return ScoreResult(
@@ -367,7 +395,8 @@ object RecoveryScoreCalculator {
         sleepDeltaText: String?,
         consistencyScore: Float,
         spO2Note: String,
-        quality: DataQualityReport
+        quality: DataQualityReport,
+        sleepAvailable: Boolean = true
     ): String {
         val scoreText = "Recovery score: ${total.toInt()}/100."
 
@@ -380,7 +409,11 @@ object RecoveryScoreCalculator {
             "$scoreText Recovery $direction ${kotlin.math.abs(total - priorScore).toInt()} pts vs yesterday.$driversText$spO2Note"
         } else {
             val hrText = hrDeltaText ?: "Resting HR within normal range"
-            "$scoreText $hrText. Sleep consistency scored ${consistencyScore.toInt()}/100.$spO2Note"
+            if (!sleepAvailable) {
+                "$scoreText $hrText. Sleep data not yet synced — score based on heart rate only.$spO2Note"
+            } else {
+                "$scoreText $hrText. Sleep consistency scored ${consistencyScore.toInt()}/100.$spO2Note"
+            }
         }
     }
 

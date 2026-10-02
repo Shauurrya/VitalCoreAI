@@ -489,6 +489,19 @@ private fun AchievementBadge(
                 color = if (earned) OnBackground else OnSurfaceMuted,
                 textAlign = TextAlign.Center
             )
+            // Improvement #15: Show earned date below badge title
+            if (earned && achievement.earnedEpochDay != null) {
+                val daysAgo = (java.time.LocalDate.now().toEpochDay() - achievement.earnedEpochDay).toInt()
+                val label = when {
+                    daysAgo == 0 -> "Earned today"
+                    daysAgo == 1 -> "Earned yesterday"
+                    daysAgo < 30 -> "Earned $daysAgo days ago"
+                    else -> java.time.LocalDate.ofEpochDay(achievement.earnedEpochDay).format(
+                        java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceMuted, textAlign = TextAlign.Center)
+            }
         }
     }
 }
@@ -553,6 +566,26 @@ fun HistoryScreen(
                 }
             }
         }
+        // Improvement #13: Filter chips (This Week / This Month / All)
+        item {
+            androidx.compose.foundation.layout.Row(
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                HistoryFilter.entries.forEach { f ->
+                    val label = when (f) {
+                        HistoryFilter.THIS_WEEK  -> "This week"
+                        HistoryFilter.THIS_MONTH -> "This month"
+                        HistoryFilter.ALL        -> "All"
+                    }
+                    androidx.compose.material3.FilterChip(
+                        selected = state.filter == f,
+                        onClick = { viewModel.setFilter(f) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        }
         if (state.isLoading) {
             item { VitalSkeletonList(rows = 4, rowHeight = 148.dp) }
         } else if (state.scores.isEmpty()) {
@@ -564,7 +597,13 @@ fun HistoryScreen(
                 )
             }
         } else {
-            items(state.scores.reversed(), key = { it.dateEpochDay }) { score ->
+            val today = java.time.LocalDate.now().toEpochDay()
+            val filteredScores = when (state.filter) {
+                HistoryFilter.THIS_WEEK  -> state.scores.filter { it.dateEpochDay >= today - 6 }
+                HistoryFilter.THIS_MONTH -> state.scores.filter { it.dateEpochDay >= today - 29 }
+                HistoryFilter.ALL        -> state.scores
+            }.reversed()
+            items(filteredScores, key = { it.dateEpochDay }) { score ->
                 VitalCard(
                     modifier = Modifier.fillMaxWidth(),
                     accent = if (score.recoveryScore != null) RecoveryAccent else null,
@@ -940,7 +979,9 @@ private fun DayDetailScoreRing(
     accent: androidx.compose.ui.graphics.Color,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    // Improvement #16: accessibility - announce both label and score value for TalkBack users.
+    val scoreDesc = if (score != null) "$label score: ${score.toInt()}" else "$label score: unavailable"
+    Column(modifier = modifier.semantics { contentDescription = scoreDesc }, horizontalAlignment = Alignment.CenterHorizontally) {
         PercentRing(
             value = score,
             label = label,

@@ -1,4 +1,4 @@
-package com.example.vitalcoreai.ui.screens
+﻿package com.example.vitalcoreai.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -351,6 +351,48 @@ fun HeartScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         TrendLineChart(values = state.chartValues, accent = HeartAccent, height = 180.dp)
+                    }
+                }
+            }
+            // Improvement #6: 14-day HRV trend chart
+            if (state.hrvChartValues.isNotEmpty()) {
+                item {
+                    VitalSectionCard(
+                        title = "HRV (RMSSD) trend",
+                        subtitle = "Latest ${state.hrvChartValues.size} days \u00b7 ms",
+                        modifier = Modifier.fillMaxWidth(),
+                        accent = HeartAccent
+                    ) {
+                        state.latestHrvRmssdMs?.let { hrv ->
+                            Text(
+                                "${hrv.toInt()} ms today",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = HeartAccent
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        TrendLineChart(values = state.hrvChartValues, accent = HeartAccent, height = 160.dp)
+                    }
+                }
+            }
+            // Improvement #7: 30-day SpO2 trend with reference note
+            if (state.spo2ChartValues.isNotEmpty()) {
+                item {
+                    VitalSectionCard(
+                        title = "Blood oxygen (SpO\u2082) trend",
+                        subtitle = "Latest ${state.spo2ChartValues.size} days \u00b7 % (normal 95\u2013100%)",
+                        modifier = Modifier.fillMaxWidth(),
+                        accent = ReadinessAccent
+                    ) {
+                        state.latestSpo2?.let { spo2 ->
+                            Text(
+                                "${spo2.toInt()}% today",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (spo2 >= 95f) ReadinessAccent else AlertRed
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        TrendLineChart(values = state.spo2ChartValues, accent = ReadinessAccent, yRange = 88f..100f, height = 160.dp)
                     }
                 }
             }

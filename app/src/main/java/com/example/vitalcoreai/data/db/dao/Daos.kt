@@ -71,6 +71,29 @@ interface DailyMetricsDao {
 
     @Query("SELECT dateEpochDay, steps AS value FROM daily_metrics WHERE steps IS NOT NULL AND dateEpochDay BETWEEN :start AND :end")
     suspend fun getStepsInRange(start: Long, end: Long): List<DayIntValue>
+
+    /**
+     * Days that have raw health data but no computed scores row — either because the
+     * score pipeline did not run (watch un-synced during the usual trailing window) or
+     * because it crashed before writing. These must be re-synced even though `present`
+     * already contains their dateEpochDay.
+     */
+    @Query(
+        "SELECT dm.dateEpochDay FROM daily_metrics dm " +
+        "LEFT JOIN computed_scores cs ON dm.dateEpochDay = cs.dateEpochDay " +
+        "WHERE dm.hasData = 1 AND cs.dateEpochDay IS NULL " +
+        "AND dm.dateEpochDay BETWEEN :start AND :end"
+    )
+    suspend fun getDaysWithMissingScores(start: Long, end: Long): List<Long>
+
+    /** Count of days with raw data but no computed scores — cheap check for the ViewModel. */
+    @Query(
+        "SELECT COUNT(*) FROM daily_metrics dm " +
+        "LEFT JOIN computed_scores cs ON dm.dateEpochDay = cs.dateEpochDay " +
+        "WHERE dm.hasData = 1 AND cs.dateEpochDay IS NULL " +
+        "AND dm.dateEpochDay BETWEEN :start AND :end"
+    )
+    suspend fun countDaysWithMissingScores(start: Long, end: Long): Int
 }
 
 /** Projection for day-keyed integer series (streaks, gap detection). */

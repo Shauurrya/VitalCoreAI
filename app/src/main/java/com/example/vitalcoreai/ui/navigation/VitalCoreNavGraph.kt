@@ -1,4 +1,4 @@
-package com.example.vitalcoreai.ui.navigation
+﻿package com.example.vitalcoreai.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.animation.fadeIn
@@ -80,7 +80,10 @@ fun VitalCoreNavGraph(
         }
 
         composable(Routes.HOME) {
-            HomeScreen(onNavigate = { route -> navController.navigate(route) })
+            HomeScreen(onNavigate = { route ->
+                // launchSingleTop prevents duplicate screens when the user taps quickly.
+                navController.navigate(route) { launchSingleTop = true }
+            })
         }
 
         composable(Routes.RECOVERY) {
@@ -122,7 +125,7 @@ fun VitalCoreNavGraph(
         composable(Routes.ASK_COACH) {
             AskCoachScreen(
                 onBack = { navController.popBackStack() },
-                onNavigate = { route -> navController.navigate(route) }
+                onNavigate = { route -> navController.navigate(route) { launchSingleTop = true } }
             )
         }
 

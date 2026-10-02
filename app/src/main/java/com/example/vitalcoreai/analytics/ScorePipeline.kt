@@ -439,7 +439,7 @@ object ScorePipeline {
         )
 
         // ── Recovery / sleep / readiness / stress / activity ─────────────────
-        val recoveryResult = if (todaySleep != null && todayRHR != null) {
+        val recoveryResult = if (todayRHR != null) {
             RecoveryScoreCalculator.calculate(
                 todaySleep = todaySleep,
                 sleepBaseline14Days = sleepBaseline14,

@@ -45,6 +45,29 @@ fun ForecastScreen(
     ) {
         item { ForecastCard(forecast = state.forecast) }
 
+        // Improvement #11: Share forecast as plain text
+        item {
+            val forecast = state.forecast
+            if (forecast != null) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        val text = buildString {
+                            appendLine("VitalCoreAI tomorrow forecast")
+                            appendLine("Range: ${forecast.low}–${forecast.high} / 100")
+                            forecast.drivers.take(3).forEach { d -> appendLine("  \u2022 ${d.name}: ${if (d.points >= 0f) "+" else ""}${d.points.toInt()} pts") }
+                        }
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(intent, "Share forecast"))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Share forecast") }
+            }
+        }
+
         item {
             VitalCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
